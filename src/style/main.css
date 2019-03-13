@@ -33,19 +33,6 @@ p {
   font-size: 1.125em;
 }
 
-.githubLink {
-  z-index: 2;
-  position: fixed;
-  top: 0;
-  right: 0;
-}
-
-@media (max-width: 700px) {
-  .githubLink {
-    display: none !important;
-  }
-}
-
 div.modalTerminal a {
   color: rgb(253, 152, 209);
   font-weight: bold;

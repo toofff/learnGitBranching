@@ -17,8 +17,7 @@ exports.dialog = {
         'You can see all the commands available with `show commands` at the terminal.',
         '',
         'PS: Want to go straight to a sandbox next time?',
-        'Try out ',
-        '[this special link](https://pcottle.github.io/learnGitBranching/?NODEMO)'
+        'Try out '
       ]
     }
   }],
@@ -31,17 +30,7 @@ exports.dialog = {
         'Esta aplicación está diseñada para ayudar a los principantes ',
         'a manejar los poderosos conceptos que hay detrás del trabajo ',
         'con ramas (branches) en Git. Esperamos que disfrutes la aplicación ',
-        'y tal vez incluso ¡que aprendas algo! ',
-        '',
-        '# ¡Demo!',
-        '',
-        'Si no viste la demo, mirala en esta dirección:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?demo](https://pcottle.github.io/learnGitBranching/?demo)',
-        '',
-        '¿Harto de este mensaje? Agregale `?NODEMO` a la URL para dejar de verlo, como en este link:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?NODEMO](?NODEMO)'
+        'y tal vez incluso ¡que aprendas algo! '
       ]
     }
   }, {
@@ -87,17 +76,7 @@ exports.dialog = {
         'Este aplicativo foi desenvolvido para ajudar os iniciantes a ',
         'aprender os poderosos conceitos por trás do branching com ',
         'o git. Esperamos que você goste deste aplicativo e talvez ',
-        'até aprenda alguma coisa!',
-        '',
-        '# Demo!',
-        '',
-        'Se você ainda não viu o demo, veja aqui:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?demo](https://pcottle.github.io/learnGitBranching/?demo)',
-        '',
-        'Farto desta mensagem? Acrescente `?NODEMO` ao endereço para se livrar dela, como no link abaixo:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?NODEMO](?NODEMO)'
+        'até aprenda alguma coisa!'
       ]
     }
   }, {
@@ -143,17 +122,7 @@ exports.dialog = {
         'Esta aplicación foi desenvolvida para axudar os iniciados en git a ',
         'aprender os poderosos conceptos que hai por detrás do branching con ',
         ' git. Agardamos que disfrutes desta aplicación, e tal vez, ',
-        'ata aprendas algunha cousa!',
-        '',
-        '# Demostracións!',
-        '',
-        'Se aínda non viches a demo, olla aquí:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?demo](https://pcottle.github.io/learnGitBranching/?demo)',
-        '',
-        '¿Farto destas mensaxes? Engade `?NODEMO` á dirección para librarte dela, como no link de abaixo:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?NODEMO](?NODEMO)'
+        'ata aprendas algunha cousa!'
       ]
     }
   }, {
@@ -196,17 +165,7 @@ exports.dialog = {
       markdowns: [
         '## Willkommen bei Learn Git Branching!',
         '',
-        'Der Sinn dieser Anwendung ist, die umfangreichen und komplexen Zusammenhänge der Prozesse, die bei der Arbeit mit Git ablaufen, zu verdeutlichen. Ich hoffe du hast Spaß dabei und lernst vielleicht sogar etwas!',
-        '',
-        '# Demo!',
-        '',
-        'Falls du die Demonstration noch nicht gesehen hast, schau sie dir hier an:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?demo](https://pcottle.github.io/learnGitBranching/?demo)',
-        '',
-        'Genervt von diesem Fenster? Häng `?NODEMO` an die URL um es los zu werden, so wie hier:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?NODEMO](?NODEMO)'
+        'Der Sinn dieser Anwendung ist, die umfangreichen und komplexen Zusammenhänge der Prozesse, die bei der Arbeit mit Git ablaufen, zu verdeutlichen. Ich hoffe du hast Spaß dabei und lernst vielleicht sogar etwas!'
       ]
     }
   }, {
@@ -252,17 +211,7 @@ exports.dialog = {
         'gitのパワフルなブランチ機能のコンセプトが ',
         '学びやすくなるようにこのアプリケーションを作りました。 ',
         'このアプリケーションを楽しんで使って頂いて、 ',
-        '何かを学習して頂けたなら嬉しいです。',
-        '',
-        '# とりあえず触ってみたい方へ：',
-        '',
-        '簡単なデモを用意してあるので、もしよければこちらもご覧ください：',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?demo](https://pcottle.github.io/learnGitBranching/?demo&locale=ja)',
-        '',
-        'このダイアログ自体を省略するには、以下のようにURLの末尾にクエリストリング`?NODEMO`を付加してアクセスしてください。',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?NODEMO](https://pcottle.github.io/learnGitBranching/?NODEMO&locale=ja)'
+        '何かを学習して頂けたなら嬉しいです。'
       ]
     }
   }, {
@@ -297,9 +246,7 @@ exports.dialog = {
         '',
         'それから、不自然な記号が出てきたときは顔を左方向に傾けてみるといいかもしれません :P（ペロッ）',
         '',
-        'それでは教材の選択画面に進んでみることにします。',
-        '',
-        '（なお、日本語版製作者のフォークサイトは[こちら](https://remore.github.io/learnGitBranching-ja/)になります。）'
+        'それでは教材の選択画面に進んでみることにします。'
       ]
     }
   }],
@@ -331,17 +278,7 @@ exports.dialog = {
         '## 歡迎光臨 Learn Git Branching!',
         '',
         '本應用旨在幫助初學者領會 git 分支背後的強大概念。',
-        '希望你能喜歡這個應用，並學到知識！',
-        '',
-        '# 演示！',
-        '',
-        '如果你還沒看過演示，請到此查看：',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?demo](https://pcottle.github.io/learnGitBranching/?demo)',
-        '',
-        '厭煩這個對話視窗嗎？在 URL 後頭加上 `?NODEMO` 就看不到它了，也可以直接點下邊這個連結：',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?NODEMO](https://pcottle.github.io/learnGitBranching/?NODEMO)'
+        '希望你能喜歡這個應用，並學到知識！'
       ]
     }
   }, {
@@ -384,12 +321,7 @@ exports.dialog = {
         '',
         '이 애플리케이션은 git을 쓸 때 필요한 브랜치에 대한 개념을',
         '탄탄히 잡게끔 도와드리기 위해 만들었습니다. 재밌게 사용해주시기를',
-        '바라며, 무언가를 배워가신다면 더 기쁘겠습니다!',
-        '',
-        '이 애플리케이션은 [Peter Cottle](https://github.io/pcottle)님의 [LearnGitBranching](https://pcottle.github.io/learnGitBranching/)를 번역한 것입니다.',
-        '아래 데모를 먼저 보셔도 좋습니다.',
-        '',
-        '<https://pcottle.github.io/learnGitBranching/?demo&locale=ko>'
+        '바라며, 무언가를 배워가신다면 더 기쁘겠습니다!'
       ]
     }
   }, {
@@ -433,17 +365,7 @@ exports.dialog = {
         'Cette application a été conçue pour aider les débutants à saisir ',
         'les puissants concepts derrière les branches en travaillant ',
         'avec git. Nous espérons que vous apprécierez cette application et ',
-        'que vous apprendrez peut-être quelque chose d\'intéressant !',
-        '',
-        '# Démo !',
-        '',
-        'Si vous n\'avez pas vu la démo, vous pouvez le faire là :',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?demo](https://pcottle.github.io/learnGitBranching/?demo)',
-        '',
-        'Agacé par ce dialogue ? Ajoutez `?NODEMO` à l\'URL pour le supprimer, en lien ci-dessous pour votre commodité :',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?NODEMO](?NODEMO)'
+        'que vous apprendrez peut-être quelque chose d\'intéressant !'
       ]
     }
   }, {
@@ -489,17 +411,7 @@ exports.dialog = {
         'Это приложение создано, чтобы помочь новичкам постичь ',
         'мощные возможности ветвления и работы ',
         'с git. Мы надеемся, что вам понравится эта игра ',
-        'и может вы что-то усвоите!',
-        '',
-        '# Демо!',
-        '',
-        'Если ты не видел демонстрацию – посмотри её тут:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?demo](https://pcottle.github.io/learnGitBranching/?demo)',
-        '',
-        'Достало это сообщение? Добавь `?NODEMO` к адресу и навсегда забудь о нём, ниже ссылка для удобства:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?NODEMO](?NODEMO)'
+        'и может вы что-то усвоите!'
       ]
     }
   }, {
@@ -546,15 +458,7 @@ exports.dialog = {
         '"Learn Git Branching" \u2014 це найбільш візуальний та інтерактивний спосіб вивчення Git в Інтернеті. ',
         'Ти зможеш проходити захопливі рівні, дивитися ',
         'покрокові інструкції з використання потужних функцій Git, навіть трохи ',
-        'розважитись в процесі навчання.',
-        '',
-        'Після цього діалогу побачиш список доступних рівнів. Якщо ти новачок, ',
-        'просто почни з першого рівня. Якщо вже знаєш основи Git, ',
-        'спробуй більш складні рівні в кінці.',
-        '',
-        'P.S. Хочеш перейти одразу до пісочниці наступного разу?',
-        'Спробуй ',
-        '[це спеціальне посилання.](https://pcottle.github.io/learnGitBranching/?NODEMO)'
+        'розважитись в процесі навчання.'
       ]
     }
   }]
