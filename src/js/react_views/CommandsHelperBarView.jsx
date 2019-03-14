@@ -32,11 +32,6 @@ var CommandsHelperBarView = React.createClass({
         this.fireCommand('levels');
       }.bind(this),
     }, {
-      text: 'Solution',
-      onClick: function() {
-        this.fireCommand('show solution');
-      }.bind(this),
-    }, {
       text: 'Reset',
       onClick: function() {
         this.fireCommand('reset');

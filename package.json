@@ -2,7 +2,7 @@
   "name": "LearnGitBranching",
   "version": "0.8.0",
   "description": "An interactive git visualization to challenge and educate!",
-  "homepage": "https://learngitbranching.js.org",
+  "homepage": "https://toofff.github.io/learnGitBranching/",
   "author": "Peter Cottle <petermcottle@gmail.com>",
   "license": "MIT",
   "scripts": {
@@ -10,7 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/pcottle/learnGitBranching"
+    "url": "https://github.com/toofff/learnGitBranching"
   },
   "devDependencies": {
     "browserify": "^13.0.0",
