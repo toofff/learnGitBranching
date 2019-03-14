@@ -1609,9 +1609,10 @@
 }));
 
 },{"underscore":2}],2:[function(require,module,exports){
-//     Underscore.js 1.8.3
+(function (global){
+//     Underscore.js 1.9.1
 //     http://underscorejs.org
-//     (c) 2009-2015 Jeremy Ashkenas, DocumentCloud and Investigative Reporters & Editors
+//     (c) 2009-2018 Jeremy Ashkenas, DocumentCloud and Investigative Reporters & Editors
 //     Underscore may be freely distributed under the MIT license.
 
 (function() {
@@ -1619,29 +1620,32 @@
   // Baseline setup
   // --------------
 
-  // Establish the root object, `window` in the browser, or `exports` on the server.
-  var root = this;
+  // Establish the root object, `window` (`self`) in the browser, `global`
+  // on the server, or `this` in some virtual machines. We use `self`
+  // instead of `window` for `WebWorker` support.
+  var root = typeof self == 'object' && self.self === self && self ||
+            typeof global == 'object' && global.global === global && global ||
+            this ||
+            {};
 
   // Save the previous value of the `_` variable.
   var previousUnderscore = root._;
 
   // Save bytes in the minified (but not gzipped) version:
-  var ArrayProto = Array.prototype, ObjProto = Object.prototype, FuncProto = Function.prototype;
+  var ArrayProto = Array.prototype, ObjProto = Object.prototype;
+  var SymbolProto = typeof Symbol !== 'undefined' ? Symbol.prototype : null;
 
   // Create quick reference variables for speed access to core prototypes.
-  var
-    push             = ArrayProto.push,
-    slice            = ArrayProto.slice,
-    toString         = ObjProto.toString,
-    hasOwnProperty   = ObjProto.hasOwnProperty;
+  var push = ArrayProto.push,
+      slice = ArrayProto.slice,
+      toString = ObjProto.toString,
+      hasOwnProperty = ObjProto.hasOwnProperty;
 
   // All **ECMAScript 5** native function implementations that we hope to use
   // are declared here.
-  var
-    nativeIsArray      = Array.isArray,
-    nativeKeys         = Object.keys,
-    nativeBind         = FuncProto.bind,
-    nativeCreate       = Object.create;
+  var nativeIsArray = Array.isArray,
+      nativeKeys = Object.keys,
+      nativeCreate = Object.create;
 
   // Naked function reference for surrogate-prototype-swapping.
   var Ctor = function(){};
@@ -1654,10 +1658,12 @@
   };
 
   // Export the Underscore object for **Node.js**, with
-  // backwards-compatibility for the old `require()` API. If we're in
+  // backwards-compatibility for their old module API. If we're in
   // the browser, add `_` as a global object.
-  if (typeof exports !== 'undefined') {
-    if (typeof module !== 'undefined' && module.exports) {
+  // (`nodeType` is checked to ensure that `module`
+  // and `exports` are not HTML elements.)
+  if (typeof exports != 'undefined' && !exports.nodeType) {
+    if (typeof module != 'undefined' && !module.nodeType && module.exports) {
       exports = module.exports = _;
     }
     exports._ = _;
@@ -1666,7 +1672,7 @@
   }
 
   // Current version.
-  _.VERSION = '1.8.3';
+  _.VERSION = '1.9.1';
 
   // Internal function that returns an efficient (for current engines) version
   // of the passed-in callback, to be repeatedly applied in other Underscore
@@ -1677,9 +1683,7 @@
       case 1: return function(value) {
         return func.call(context, value);
       };
-      case 2: return function(value, other) {
-        return func.call(context, value, other);
-      };
+      // The 2-argument case is omitted because we’re not using it.
       case 3: return function(value, index, collection) {
         return func.call(context, value, index, collection);
       };
@@ -1692,34 +1696,51 @@
     };
   };
 
-  // A mostly-internal function to generate callbacks that can be applied
-  // to each element in a collection, returning the desired result — either
-  // identity, an arbitrary callback, a property matcher, or a property accessor.
+  var builtinIteratee;
+
+  // An internal function to generate callbacks that can be applied to each
+  // element in a collection, returning the desired result — either `identity`,
+  // an arbitrary callback, a property matcher, or a property accessor.
   var cb = function(value, context, argCount) {
+    if (_.iteratee !== builtinIteratee) return _.iteratee(value, context);
     if (value == null) return _.identity;
     if (_.isFunction(value)) return optimizeCb(value, context, argCount);
-    if (_.isObject(value)) return _.matcher(value);
+    if (_.isObject(value) && !_.isArray(value)) return _.matcher(value);
     return _.property(value);
   };
-  _.iteratee = function(value, context) {
+
+  // External wrapper for our callback generator. Users may customize
+  // `_.iteratee` if they want additional predicate/iteratee shorthand styles.
+  // This abstraction hides the internal-only argCount argument.
+  _.iteratee = builtinIteratee = function(value, context) {
     return cb(value, context, Infinity);
   };
 
-  // An internal function for creating assigner functions.
-  var createAssigner = function(keysFunc, undefinedOnly) {
-    return function(obj) {
-      var length = arguments.length;
-      if (length < 2 || obj == null) return obj;
-      for (var index = 1; index < length; index++) {
-        var source = arguments[index],
-            keys = keysFunc(source),
-            l = keys.length;
-        for (var i = 0; i < l; i++) {
-          var key = keys[i];
-          if (!undefinedOnly || obj[key] === void 0) obj[key] = source[key];
-        }
+  // Some functions take a variable number of arguments, or a few expected
+  // arguments at the beginning and then a variable number of values to operate
+  // on. This helper accumulates all remaining arguments past the function’s
+  // argument length (or an explicit `startIndex`), into an array that becomes
+  // the last argument. Similar to ES6’s "rest parameter".
+  var restArguments = function(func, startIndex) {
+    startIndex = startIndex == null ? func.length - 1 : +startIndex;
+    return function() {
+      var length = Math.max(arguments.length - startIndex, 0),
+          rest = Array(length),
+          index = 0;
+      for (; index < length; index++) {
+        rest[index] = arguments[index + startIndex];
       }
-      return obj;
+      switch (startIndex) {
+        case 0: return func.call(this, rest);
+        case 1: return func.call(this, arguments[0], rest);
+        case 2: return func.call(this, arguments[0], arguments[1], rest);
+      }
+      var args = Array(startIndex + 1);
+      for (index = 0; index < startIndex; index++) {
+        args[index] = arguments[index];
+      }
+      args[startIndex] = rest;
+      return func.apply(this, args);
     };
   };
 
@@ -1733,18 +1754,31 @@
     return result;
   };
 
-  var property = function(key) {
+  var shallowProperty = function(key) {
     return function(obj) {
       return obj == null ? void 0 : obj[key];
     };
   };
 
+  var has = function(obj, path) {
+    return obj != null && hasOwnProperty.call(obj, path);
+  }
+
+  var deepGet = function(obj, path) {
+    var length = path.length;
+    for (var i = 0; i < length; i++) {
+      if (obj == null) return void 0;
+      obj = obj[path[i]];
+    }
+    return length ? obj : void 0;
+  };
+
   // Helper for collection methods to determine whether a collection
-  // should be iterated as an array or as an object
+  // should be iterated as an array or as an object.
   // Related: http://people.mozilla.org/~jorendorff/es6-draft.html#sec-tolength
   // Avoids a very nasty iOS 8 JIT bug on ARM-64. #2094
   var MAX_ARRAY_INDEX = Math.pow(2, 53) - 1;
-  var getLength = property('length');
+  var getLength = shallowProperty('length');
   var isArrayLike = function(collection) {
     var length = getLength(collection);
     return typeof length == 'number' && length >= 0 && length <= MAX_ARRAY_INDEX;
@@ -1786,30 +1820,29 @@
   };
 
   // Create a reducing function iterating left or right.
-  function createReduce(dir) {
-    // Optimized iterator function as using arguments.length
-    // in the main function will deoptimize the, see #1991.
-    function iterator(obj, iteratee, memo, keys, index, length) {
+  var createReduce = function(dir) {
+    // Wrap code that reassigns argument variables in a separate function than
+    // the one that accesses `arguments.length` to avoid a perf hit. (#1991)
+    var reducer = function(obj, iteratee, memo, initial) {
+      var keys = !isArrayLike(obj) && _.keys(obj),
+          length = (keys || obj).length,
+          index = dir > 0 ? 0 : length - 1;
+      if (!initial) {
+        memo = obj[keys ? keys[index] : index];
+        index += dir;
+      }
       for (; index >= 0 && index < length; index += dir) {
         var currentKey = keys ? keys[index] : index;
         memo = iteratee(memo, obj[currentKey], currentKey, obj);
       }
       return memo;
-    }
+    };
 
     return function(obj, iteratee, memo, context) {
-      iteratee = optimizeCb(iteratee, context, 4);
-      var keys = !isArrayLike(obj) && _.keys(obj),
-          length = (keys || obj).length,
-          index = dir > 0 ? 0 : length - 1;
-      // Determine the initial value if none is provided.
-      if (arguments.length < 3) {
-        memo = obj[keys ? keys[index] : index];
-        index += dir;
-      }
-      return iterator(obj, iteratee, memo, keys, index, length);
+      var initial = arguments.length >= 3;
+      return reducer(obj, optimizeCb(iteratee, context, 4), memo, initial);
     };
-  }
+  };
 
   // **Reduce** builds up a single result from a list of values, aka `inject`,
   // or `foldl`.
@@ -1820,12 +1853,8 @@
 
   // Return the first value which passes a truth test. Aliased as `detect`.
   _.find = _.detect = function(obj, predicate, context) {
-    var key;
-    if (isArrayLike(obj)) {
-      key = _.findIndex(obj, predicate, context);
-    } else {
-      key = _.findKey(obj, predicate, context);
-    }
+    var keyFinder = isArrayLike(obj) ? _.findIndex : _.findKey;
+    var key = keyFinder(obj, predicate, context);
     if (key !== void 0 && key !== -1) return obj[key];
   };
 
@@ -1880,14 +1909,26 @@
   };
 
   // Invoke a method (with arguments) on every item in a collection.
-  _.invoke = function(obj, method) {
-    var args = slice.call(arguments, 2);
-    var isFunc = _.isFunction(method);
-    return _.map(obj, function(value) {
-      var func = isFunc ? method : value[method];
-      return func == null ? func : func.apply(value, args);
+  _.invoke = restArguments(function(obj, path, args) {
+    var contextPath, func;
+    if (_.isFunction(path)) {
+      func = path;
+    } else if (_.isArray(path)) {
+      contextPath = path.slice(0, -1);
+      path = path[path.length - 1];
+    }
+    return _.map(obj, function(context) {
+      var method = func;
+      if (!method) {
+        if (contextPath && contextPath.length) {
+          context = deepGet(context, contextPath);
+        }
+        if (context == null) return void 0;
+        method = context[path];
+      }
+      return method == null ? method : method.apply(context, args);
     });
-  };
+  });
 
   // Convenience version of a common use case of `map`: fetching a property.
   _.pluck = function(obj, key) {
@@ -1910,20 +1951,20 @@
   _.max = function(obj, iteratee, context) {
     var result = -Infinity, lastComputed = -Infinity,
         value, computed;
-    if (iteratee == null && obj != null) {
+    if (iteratee == null || typeof iteratee == 'number' && typeof obj[0] != 'object' && obj != null) {
       obj = isArrayLike(obj) ? obj : _.values(obj);
       for (var i = 0, length = obj.length; i < length; i++) {
         value = obj[i];
-        if (value > result) {
+        if (value != null && value > result) {
           result = value;
         }
       }
     } else {
       iteratee = cb(iteratee, context);
-      _.each(obj, function(value, index, list) {
-        computed = iteratee(value, index, list);
+      _.each(obj, function(v, index, list) {
+        computed = iteratee(v, index, list);
         if (computed > lastComputed || computed === -Infinity && result === -Infinity) {
-          result = value;
+          result = v;
           lastComputed = computed;
         }
       });
@@ -1935,20 +1976,20 @@
   _.min = function(obj, iteratee, context) {
     var result = Infinity, lastComputed = Infinity,
         value, computed;
-    if (iteratee == null && obj != null) {
+    if (iteratee == null || typeof iteratee == 'number' && typeof obj[0] != 'object' && obj != null) {
       obj = isArrayLike(obj) ? obj : _.values(obj);
       for (var i = 0, length = obj.length; i < length; i++) {
         value = obj[i];
-        if (value < result) {
+        if (value != null && value < result) {
           result = value;
         }
       }
     } else {
       iteratee = cb(iteratee, context);
-      _.each(obj, function(value, index, list) {
-        computed = iteratee(value, index, list);
+      _.each(obj, function(v, index, list) {
+        computed = iteratee(v, index, list);
         if (computed < lastComputed || computed === Infinity && result === Infinity) {
-          result = value;
+          result = v;
           lastComputed = computed;
         }
       });
@@ -1956,21 +1997,13 @@
     return result;
   };
 
-  // Shuffle a collection, using the modern version of the
-  // [Fisher-Yates shuffle](http://en.wikipedia.org/wiki/Fisher–Yates_shuffle).
+  // Shuffle a collection.
   _.shuffle = function(obj) {
-    var set = isArrayLike(obj) ? obj : _.values(obj);
-    var length = set.length;
-    var shuffled = Array(length);
-    for (var index = 0, rand; index < length; index++) {
-      rand = _.random(0, index);
-      if (rand !== index) shuffled[index] = shuffled[rand];
-      shuffled[rand] = set[index];
-    }
-    return shuffled;
+    return _.sample(obj, Infinity);
   };
 
-  // Sample **n** random values from a collection.
+  // Sample **n** random values from a collection using the modern version of the
+  // [Fisher-Yates shuffle](http://en.wikipedia.org/wiki/Fisher–Yates_shuffle).
   // If **n** is not specified, returns a single random element.
   // The internal `guard` argument allows it to work with `map`.
   _.sample = function(obj, n, guard) {
@@ -1978,17 +2011,28 @@
       if (!isArrayLike(obj)) obj = _.values(obj);
       return obj[_.random(obj.length - 1)];
     }
-    return _.shuffle(obj).slice(0, Math.max(0, n));
+    var sample = isArrayLike(obj) ? _.clone(obj) : _.values(obj);
+    var length = getLength(sample);
+    n = Math.max(Math.min(n, length), 0);
+    var last = length - 1;
+    for (var index = 0; index < n; index++) {
+      var rand = _.random(index, last);
+      var temp = sample[index];
+      sample[index] = sample[rand];
+      sample[rand] = temp;
+    }
+    return sample.slice(0, n);
   };
 
   // Sort the object's values by a criterion produced by an iteratee.
   _.sortBy = function(obj, iteratee, context) {
+    var index = 0;
     iteratee = cb(iteratee, context);
-    return _.pluck(_.map(obj, function(value, index, list) {
+    return _.pluck(_.map(obj, function(value, key, list) {
       return {
         value: value,
-        index: index,
-        criteria: iteratee(value, index, list)
+        index: index++,
+        criteria: iteratee(value, key, list)
       };
     }).sort(function(left, right) {
       var a = left.criteria;
@@ -2002,9 +2046,9 @@
   };
 
   // An internal function used for aggregate "group by" operations.
-  var group = function(behavior) {
+  var group = function(behavior, partition) {
     return function(obj, iteratee, context) {
-      var result = {};
+      var result = partition ? [[], []] : {};
       iteratee = cb(iteratee, context);
       _.each(obj, function(value, index) {
         var key = iteratee(value, index, obj);
@@ -2017,7 +2061,7 @@
   // Groups the object's values by a criterion. Pass either a string attribute
   // to group by, or a function that returns the criterion.
   _.groupBy = group(function(result, value, key) {
-    if (_.has(result, key)) result[key].push(value); else result[key] = [value];
+    if (has(result, key)) result[key].push(value); else result[key] = [value];
   });
 
   // Indexes the object's values by a criterion, similar to `groupBy`, but for
@@ -2030,13 +2074,18 @@
   // either a string attribute to count by, or a function that returns the
   // criterion.
   _.countBy = group(function(result, value, key) {
-    if (_.has(result, key)) result[key]++; else result[key] = 1;
+    if (has(result, key)) result[key]++; else result[key] = 1;
   });
 
+  var reStrSymbol = /[^\ud800-\udfff]|[\ud800-\udbff][\udc00-\udfff]|[\ud800-\udfff]/g;
   // Safely create a real, live array from anything iterable.
   _.toArray = function(obj) {
     if (!obj) return [];
     if (_.isArray(obj)) return slice.call(obj);
+    if (_.isString(obj)) {
+      // Keep surrogate pair characters together
+      return obj.match(reStrSymbol);
+    }
     if (isArrayLike(obj)) return _.map(obj, _.identity);
     return _.values(obj);
   };
@@ -2049,14 +2098,9 @@
 
   // Split a collection into two arrays: one whose elements all satisfy the given
   // predicate, and one whose elements all do not satisfy the predicate.
-  _.partition = function(obj, predicate, context) {
-    predicate = cb(predicate, context);
-    var pass = [], fail = [];
-    _.each(obj, function(value, key, obj) {
-      (predicate(value, key, obj) ? pass : fail).push(value);
-    });
-    return [pass, fail];
-  };
+  _.partition = group(function(result, value, pass) {
+    result[pass ? 0 : 1].push(value);
+  }, true);
 
   // Array Functions
   // ---------------
@@ -2065,7 +2109,7 @@
   // values in the array. Aliased as `head` and `take`. The **guard** check
   // allows it to work with `_.map`.
   _.first = _.head = _.take = function(array, n, guard) {
-    if (array == null) return void 0;
+    if (array == null || array.length < 1) return n == null ? void 0 : [];
     if (n == null || guard) return array[0];
     return _.initial(array, array.length - n);
   };
@@ -2080,7 +2124,7 @@
   // Get the last element of an array. Passing **n** will return the last N
   // values in the array.
   _.last = function(array, n, guard) {
-    if (array == null) return void 0;
+    if (array == null || array.length < 1) return n == null ? void 0 : [];
     if (n == null || guard) return array[array.length - 1];
     return _.rest(array, Math.max(0, array.length - n));
   };
@@ -2094,21 +2138,23 @@
 
   // Trim out all falsy values from an array.
   _.compact = function(array) {
-    return _.filter(array, _.identity);
+    return _.filter(array, Boolean);
   };
 
   // Internal implementation of a recursive `flatten` function.
-  var flatten = function(input, shallow, strict, startIndex) {
-    var output = [], idx = 0;
-    for (var i = startIndex || 0, length = getLength(input); i < length; i++) {
+  var flatten = function(input, shallow, strict, output) {
+    output = output || [];
+    var idx = output.length;
+    for (var i = 0, length = getLength(input); i < length; i++) {
       var value = input[i];
       if (isArrayLike(value) && (_.isArray(value) || _.isArguments(value))) {
-        //flatten current level of array or arguments object
-        if (!shallow) value = flatten(value, shallow, strict);
-        var j = 0, len = value.length;
-        output.length += len;
-        while (j < len) {
-          output[idx++] = value[j++];
+        // Flatten current level of array or arguments object.
+        if (shallow) {
+          var j = 0, len = value.length;
+          while (j < len) output[idx++] = value[j++];
+        } else {
+          flatten(value, shallow, strict, output);
+          idx = output.length;
         }
       } else if (!strict) {
         output[idx++] = value;
@@ -2123,12 +2169,15 @@
   };
 
   // Return a version of the array that does not contain the specified value(s).
-  _.without = function(array) {
-    return _.difference(array, slice.call(arguments, 1));
-  };
+  _.without = restArguments(function(array, otherArrays) {
+    return _.difference(array, otherArrays);
+  });
 
   // Produce a duplicate-free version of the array. If the array has already
   // been sorted, you have the option of using a faster algorithm.
+  // The faster algorithm will not work with an iteratee if the iteratee
+  // is not a one-to-one function, so providing an iteratee will disable
+  // the faster algorithm.
   // Aliased as `unique`.
   _.uniq = _.unique = function(array, isSorted, iteratee, context) {
     if (!_.isBoolean(isSorted)) {
@@ -2142,7 +2191,7 @@
     for (var i = 0, length = getLength(array); i < length; i++) {
       var value = array[i],
           computed = iteratee ? iteratee(value, i, array) : value;
-      if (isSorted) {
+      if (isSorted && !iteratee) {
         if (!i || seen !== computed) result.push(value);
         seen = computed;
       } else if (iteratee) {
@@ -2159,9 +2208,9 @@
 
   // Produce an array that contains the union: each distinct element from all of
   // the passed-in arrays.
-  _.union = function() {
-    return _.uniq(flatten(arguments, true, true));
-  };
+  _.union = restArguments(function(arrays) {
+    return _.uniq(flatten(arrays, true, true));
+  });
 
   // Produce an array that contains every item shared between all the
   // passed-in arrays.
@@ -2171,7 +2220,8 @@
     for (var i = 0, length = getLength(array); i < length; i++) {
       var item = array[i];
       if (_.contains(result, item)) continue;
-      for (var j = 1; j < argsLength; j++) {
+      var j;
+      for (j = 1; j < argsLength; j++) {
         if (!_.contains(arguments[j], item)) break;
       }
       if (j === argsLength) result.push(item);
@@ -2181,21 +2231,15 @@
 
   // Take the difference between one array and a number of other arrays.
   // Only the elements present in just the first array will remain.
-  _.difference = function(array) {
-    var rest = flatten(arguments, true, true, 1);
+  _.difference = restArguments(function(array, rest) {
+    rest = flatten(rest, true, true);
     return _.filter(array, function(value){
       return !_.contains(rest, value);
     });
-  };
-
-  // Zip together multiple lists into a single array -- elements that share
-  // an index go together.
-  _.zip = function() {
-    return _.unzip(arguments);
-  };
+  });
 
   // Complement of _.zip. Unzip accepts an array of arrays and groups
-  // each array's elements on shared indices
+  // each array's elements on shared indices.
   _.unzip = function(array) {
     var length = array && _.max(array, getLength).length || 0;
     var result = Array(length);
@@ -2206,9 +2250,13 @@
     return result;
   };
 
+  // Zip together multiple lists into a single array -- elements that share
+  // an index go together.
+  _.zip = restArguments(_.unzip);
+
   // Converts lists into objects. Pass either a single array of `[key, value]`
   // pairs, or two parallel arrays of the same length -- one of keys, and one of
-  // the corresponding values.
+  // the corresponding values. Passing by pairs is the reverse of _.pairs.
   _.object = function(list, values) {
     var result = {};
     for (var i = 0, length = getLength(list); i < length; i++) {
@@ -2221,8 +2269,8 @@
     return result;
   };
 
-  // Generator function to create the findIndex and findLastIndex functions
-  function createPredicateIndexFinder(dir) {
+  // Generator function to create the findIndex and findLastIndex functions.
+  var createPredicateIndexFinder = function(dir) {
     return function(array, predicate, context) {
       predicate = cb(predicate, context);
       var length = getLength(array);
@@ -2232,9 +2280,9 @@
       }
       return -1;
     };
-  }
+  };
 
-  // Returns the first index on an array-like that passes a predicate test
+  // Returns the first index on an array-like that passes a predicate test.
   _.findIndex = createPredicateIndexFinder(1);
   _.findLastIndex = createPredicateIndexFinder(-1);
 
@@ -2251,15 +2299,15 @@
     return low;
   };
 
-  // Generator function to create the indexOf and lastIndexOf functions
-  function createIndexFinder(dir, predicateFind, sortedIndex) {
+  // Generator function to create the indexOf and lastIndexOf functions.
+  var createIndexFinder = function(dir, predicateFind, sortedIndex) {
     return function(array, item, idx) {
       var i = 0, length = getLength(array);
       if (typeof idx == 'number') {
         if (dir > 0) {
-            i = idx >= 0 ? idx : Math.max(idx + length, i);
+          i = idx >= 0 ? idx : Math.max(idx + length, i);
         } else {
-            length = idx >= 0 ? Math.min(idx + 1, length) : idx + length + 1;
+          length = idx >= 0 ? Math.min(idx + 1, length) : idx + length + 1;
         }
       } else if (sortedIndex && idx && length) {
         idx = sortedIndex(array, item);
@@ -2274,7 +2322,7 @@
       }
       return -1;
     };
-  }
+  };
 
   // Return the position of the first occurrence of an item in an array,
   // or -1 if the item is not included in the array.
@@ -2291,7 +2339,9 @@
       stop = start || 0;
       start = 0;
     }
-    step = step || 1;
+    if (!step) {
+      step = stop < start ? -1 : 1;
+    }
 
     var length = Math.max(Math.ceil((stop - start) / step), 0);
     var range = Array(length);
@@ -2303,11 +2353,23 @@
     return range;
   };
 
+  // Chunk a single array into multiple arrays, each containing `count` or fewer
+  // items.
+  _.chunk = function(array, count) {
+    if (count == null || count < 1) return [];
+    var result = [];
+    var i = 0, length = array.length;
+    while (i < length) {
+      result.push(slice.call(array, i, i += count));
+    }
+    return result;
+  };
+
   // Function (ahem) Functions
   // ------------------
 
   // Determines whether to execute a function as a constructor
-  // or a normal function with the provided arguments
+  // or a normal function with the provided arguments.
   var executeBound = function(sourceFunc, boundFunc, context, callingContext, args) {
     if (!(callingContext instanceof boundFunc)) return sourceFunc.apply(context, args);
     var self = baseCreate(sourceFunc.prototype);
@@ -2319,52 +2381,53 @@
   // Create a function bound to a given object (assigning `this`, and arguments,
   // optionally). Delegates to **ECMAScript 5**'s native `Function.bind` if
   // available.
-  _.bind = function(func, context) {
-    if (nativeBind && func.bind === nativeBind) return nativeBind.apply(func, slice.call(arguments, 1));
+  _.bind = restArguments(function(func, context, args) {
     if (!_.isFunction(func)) throw new TypeError('Bind must be called on a function');
-    var args = slice.call(arguments, 2);
-    var bound = function() {
-      return executeBound(func, bound, context, this, args.concat(slice.call(arguments)));
-    };
+    var bound = restArguments(function(callArgs) {
+      return executeBound(func, bound, context, this, args.concat(callArgs));
+    });
     return bound;
-  };
+  });
 
   // Partially apply a function by creating a version that has had some of its
   // arguments pre-filled, without changing its dynamic `this` context. _ acts
-  // as a placeholder, allowing any combination of arguments to be pre-filled.
-  _.partial = function(func) {
-    var boundArgs = slice.call(arguments, 1);
+  // as a placeholder by default, allowing any combination of arguments to be
+  // pre-filled. Set `_.partial.placeholder` for a custom placeholder argument.
+  _.partial = restArguments(function(func, boundArgs) {
+    var placeholder = _.partial.placeholder;
     var bound = function() {
       var position = 0, length = boundArgs.length;
       var args = Array(length);
       for (var i = 0; i < length; i++) {
-        args[i] = boundArgs[i] === _ ? arguments[position++] : boundArgs[i];
+        args[i] = boundArgs[i] === placeholder ? arguments[position++] : boundArgs[i];
       }
       while (position < arguments.length) args.push(arguments[position++]);
       return executeBound(func, bound, this, this, args);
     };
     return bound;
-  };
+  });
+
+  _.partial.placeholder = _;
 
   // Bind a number of an object's methods to that object. Remaining arguments
   // are the method names to be bound. Useful for ensuring that all callbacks
   // defined on an object belong to it.
-  _.bindAll = function(obj) {
-    var i, length = arguments.length, key;
-    if (length <= 1) throw new Error('bindAll must be passed function names');
-    for (i = 1; i < length; i++) {
-      key = arguments[i];
+  _.bindAll = restArguments(function(obj, keys) {
+    keys = flatten(keys, false, false);
+    var index = keys.length;
+    if (index < 1) throw new Error('bindAll must be passed function names');
+    while (index--) {
+      var key = keys[index];
       obj[key] = _.bind(obj[key], obj);
     }
-    return obj;
-  };
+  });
 
   // Memoize an expensive function by storing its results.
   _.memoize = function(func, hasher) {
     var memoize = function(key) {
       var cache = memoize.cache;
       var address = '' + (hasher ? hasher.apply(this, arguments) : key);
-      if (!_.has(cache, address)) cache[address] = func.apply(this, arguments);
+      if (!has(cache, address)) cache[address] = func.apply(this, arguments);
       return cache[address];
     };
     memoize.cache = {};
@@ -2373,12 +2436,11 @@
 
   // Delays a function for the given number of milliseconds, and then calls
   // it with the arguments supplied.
-  _.delay = function(func, wait) {
-    var args = slice.call(arguments, 2);
-    return setTimeout(function(){
+  _.delay = restArguments(function(func, wait, args) {
+    return setTimeout(function() {
       return func.apply(null, args);
     }, wait);
-  };
+  });
 
   // Defers a function, scheduling it to run after the current call stack has
   // cleared.
@@ -2390,17 +2452,18 @@
   // but if you'd like to disable the execution on the leading edge, pass
   // `{leading: false}`. To disable execution on the trailing edge, ditto.
   _.throttle = function(func, wait, options) {
-    var context, args, result;
-    var timeout = null;
+    var timeout, context, args, result;
     var previous = 0;
     if (!options) options = {};
+
     var later = function() {
       previous = options.leading === false ? 0 : _.now();
       timeout = null;
       result = func.apply(context, args);
       if (!timeout) context = args = null;
     };
-    return function() {
+
+    var throttled = function() {
       var now = _.now();
       if (!previous && options.leading === false) previous = now;
       var remaining = wait - (now - previous);
@@ -2419,6 +2482,14 @@
       }
       return result;
     };
+
+    throttled.cancel = function() {
+      clearTimeout(timeout);
+      previous = 0;
+      timeout = context = args = null;
+    };
+
+    return throttled;
   };
 
   // Returns a function, that, as long as it continues to be invoked, will not
@@ -2426,35 +2497,32 @@
   // N milliseconds. If `immediate` is passed, trigger the function on the
   // leading edge, instead of the trailing.
   _.debounce = function(func, wait, immediate) {
-    var timeout, args, context, timestamp, result;
+    var timeout, result;
 
-    var later = function() {
-      var last = _.now() - timestamp;
-
-      if (last < wait && last >= 0) {
-        timeout = setTimeout(later, wait - last);
-      } else {
-        timeout = null;
-        if (!immediate) {
-          result = func.apply(context, args);
-          if (!timeout) context = args = null;
-        }
-      }
+    var later = function(context, args) {
+      timeout = null;
+      if (args) result = func.apply(context, args);
     };
 
-    return function() {
-      context = this;
-      args = arguments;
-      timestamp = _.now();
-      var callNow = immediate && !timeout;
-      if (!timeout) timeout = setTimeout(later, wait);
-      if (callNow) {
-        result = func.apply(context, args);
-        context = args = null;
+    var debounced = restArguments(function(args) {
+      if (timeout) clearTimeout(timeout);
+      if (immediate) {
+        var callNow = !timeout;
+        timeout = setTimeout(later, wait);
+        if (callNow) result = func.apply(this, args);
+      } else {
+        timeout = _.delay(later, wait, this, args);
       }
 
       return result;
+    });
+
+    debounced.cancel = function() {
+      clearTimeout(timeout);
+      timeout = null;
     };
+
+    return debounced;
   };
 
   // Returns the first function passed as an argument to the second,
@@ -2509,22 +2577,24 @@
   // often you call it. Useful for lazy initialization.
   _.once = _.partial(_.before, 2);
 
+  _.restArguments = restArguments;
+
   // Object Functions
   // ----------------
 
   // Keys in IE < 9 that won't be iterated by `for key in ...` and thus missed.
   var hasEnumBug = !{toString: null}.propertyIsEnumerable('toString');
   var nonEnumerableProps = ['valueOf', 'isPrototypeOf', 'toString',
-                      'propertyIsEnumerable', 'hasOwnProperty', 'toLocaleString'];
+    'propertyIsEnumerable', 'hasOwnProperty', 'toLocaleString'];
 
-  function collectNonEnumProps(obj, keys) {
+  var collectNonEnumProps = function(obj, keys) {
     var nonEnumIdx = nonEnumerableProps.length;
     var constructor = obj.constructor;
-    var proto = (_.isFunction(constructor) && constructor.prototype) || ObjProto;
+    var proto = _.isFunction(constructor) && constructor.prototype || ObjProto;
 
     // Constructor is a special case.
     var prop = 'constructor';
-    if (_.has(obj, prop) && !_.contains(keys, prop)) keys.push(prop);
+    if (has(obj, prop) && !_.contains(keys, prop)) keys.push(prop);
 
     while (nonEnumIdx--) {
       prop = nonEnumerableProps[nonEnumIdx];
@@ -2532,15 +2602,15 @@
         keys.push(prop);
       }
     }
-  }
+  };
 
   // Retrieve the names of an object's own properties.
-  // Delegates to **ECMAScript 5**'s native `Object.keys`
+  // Delegates to **ECMAScript 5**'s native `Object.keys`.
   _.keys = function(obj) {
     if (!_.isObject(obj)) return [];
     if (nativeKeys) return nativeKeys(obj);
     var keys = [];
-    for (var key in obj) if (_.has(obj, key)) keys.push(key);
+    for (var key in obj) if (has(obj, key)) keys.push(key);
     // Ahem, IE < 9.
     if (hasEnumBug) collectNonEnumProps(obj, keys);
     return keys;
@@ -2567,22 +2637,22 @@
     return values;
   };
 
-  // Returns the results of applying the iteratee to each element of the object
-  // In contrast to _.map it returns an object
+  // Returns the results of applying the iteratee to each element of the object.
+  // In contrast to _.map it returns an object.
   _.mapObject = function(obj, iteratee, context) {
     iteratee = cb(iteratee, context);
-    var keys =  _.keys(obj),
-          length = keys.length,
-          results = {},
-          currentKey;
-      for (var index = 0; index < length; index++) {
-        currentKey = keys[index];
-        results[currentKey] = iteratee(obj[currentKey], currentKey, obj);
-      }
-      return results;
+    var keys = _.keys(obj),
+        length = keys.length,
+        results = {};
+    for (var index = 0; index < length; index++) {
+      var currentKey = keys[index];
+      results[currentKey] = iteratee(obj[currentKey], currentKey, obj);
+    }
+    return results;
   };
 
   // Convert an object into a list of `[key, value]` pairs.
+  // The opposite of _.object.
   _.pairs = function(obj) {
     var keys = _.keys(obj);
     var length = keys.length;
@@ -2604,7 +2674,7 @@
   };
 
   // Return a sorted list of the function names available on the object.
-  // Aliased as `methods`
+  // Aliased as `methods`.
   _.functions = _.methods = function(obj) {
     var names = [];
     for (var key in obj) {
@@ -2613,14 +2683,33 @@
     return names.sort();
   };
 
+  // An internal function for creating assigner functions.
+  var createAssigner = function(keysFunc, defaults) {
+    return function(obj) {
+      var length = arguments.length;
+      if (defaults) obj = Object(obj);
+      if (length < 2 || obj == null) return obj;
+      for (var index = 1; index < length; index++) {
+        var source = arguments[index],
+            keys = keysFunc(source),
+            l = keys.length;
+        for (var i = 0; i < l; i++) {
+          var key = keys[i];
+          if (!defaults || obj[key] === void 0) obj[key] = source[key];
+        }
+      }
+      return obj;
+    };
+  };
+
   // Extend a given object with all the properties in passed-in object(s).
   _.extend = createAssigner(_.allKeys);
 
-  // Assigns a given object with all the own properties in the passed-in object(s)
+  // Assigns a given object with all the own properties in the passed-in object(s).
   // (https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Object/assign)
   _.extendOwn = _.assign = createAssigner(_.keys);
 
-  // Returns the first key on an object that passes a predicate test
+  // Returns the first key on an object that passes a predicate test.
   _.findKey = function(obj, predicate, context) {
     predicate = cb(predicate, context);
     var keys = _.keys(obj), key;
@@ -2630,16 +2719,21 @@
     }
   };
 
+  // Internal pick helper function to determine if `obj` has key `key`.
+  var keyInObj = function(value, key, obj) {
+    return key in obj;
+  };
+
   // Return a copy of the object only containing the whitelisted properties.
-  _.pick = function(object, oiteratee, context) {
-    var result = {}, obj = object, iteratee, keys;
+  _.pick = restArguments(function(obj, keys) {
+    var result = {}, iteratee = keys[0];
     if (obj == null) return result;
-    if (_.isFunction(oiteratee)) {
+    if (_.isFunction(iteratee)) {
+      if (keys.length > 1) iteratee = optimizeCb(iteratee, keys[1]);
       keys = _.allKeys(obj);
-      iteratee = optimizeCb(oiteratee, context);
     } else {
-      keys = flatten(arguments, false, false, 1);
-      iteratee = function(value, key, obj) { return key in obj; };
+      iteratee = keyInObj;
+      keys = flatten(keys, false, false);
       obj = Object(obj);
     }
     for (var i = 0, length = keys.length; i < length; i++) {
@@ -2648,20 +2742,22 @@
       if (iteratee(value, key, obj)) result[key] = value;
     }
     return result;
-  };
+  });
 
-   // Return a copy of the object without the blacklisted properties.
-  _.omit = function(obj, iteratee, context) {
+  // Return a copy of the object without the blacklisted properties.
+  _.omit = restArguments(function(obj, keys) {
+    var iteratee = keys[0], context;
     if (_.isFunction(iteratee)) {
       iteratee = _.negate(iteratee);
+      if (keys.length > 1) context = keys[1];
     } else {
-      var keys = _.map(flatten(arguments, false, false, 1), String);
+      keys = _.map(flatten(keys, false, false), String);
       iteratee = function(value, key) {
         return !_.contains(keys, key);
       };
     }
     return _.pick(obj, iteratee, context);
-  };
+  });
 
   // Fill in a given object with default properties.
   _.defaults = createAssigner(_.allKeys, true);
@@ -2703,12 +2799,23 @@
 
 
   // Internal recursive comparison function for `isEqual`.
-  var eq = function(a, b, aStack, bStack) {
+  var eq, deepEq;
+  eq = function(a, b, aStack, bStack) {
     // Identical objects are equal. `0 === -0`, but they aren't identical.
     // See the [Harmony `egal` proposal](http://wiki.ecmascript.org/doku.php?id=harmony:egal).
     if (a === b) return a !== 0 || 1 / a === 1 / b;
-    // A strict comparison is necessary because `null == undefined`.
-    if (a == null || b == null) return a === b;
+    // `null` or `undefined` only equal to itself (strict comparison).
+    if (a == null || b == null) return false;
+    // `NaN`s are equivalent, but non-reflexive.
+    if (a !== a) return b !== b;
+    // Exhaust primitive checks
+    var type = typeof a;
+    if (type !== 'function' && type !== 'object' && typeof b != 'object') return false;
+    return deepEq(a, b, aStack, bStack);
+  };
+
+  // Internal recursive comparison function for `isEqual`.
+  deepEq = function(a, b, aStack, bStack) {
     // Unwrap any wrapped objects.
     if (a instanceof _) a = a._wrapped;
     if (b instanceof _) b = b._wrapped;
@@ -2725,7 +2832,7 @@
         return '' + a === '' + b;
       case '[object Number]':
         // `NaN`s are equivalent, but non-reflexive.
-        // Object(NaN) is equivalent to NaN
+        // Object(NaN) is equivalent to NaN.
         if (+a !== +a) return +b !== +b;
         // An `egal` comparison is performed for other numeric values.
         return +a === 0 ? 1 / +a === 1 / b : +a === +b;
@@ -2735,6 +2842,8 @@
         // millisecond representations. Note that invalid dates with millisecond representations
         // of `NaN` are not equivalent.
         return +a === +b;
+      case '[object Symbol]':
+        return SymbolProto.valueOf.call(a) === SymbolProto.valueOf.call(b);
     }
 
     var areArrays = className === '[object Array]';
@@ -2786,7 +2895,7 @@
       while (length--) {
         // Deep compare each member
         key = keys[length];
-        if (!(_.has(b, key) && eq(a[key], b[key], aStack, bStack))) return false;
+        if (!(has(b, key) && eq(a[key], b[key], aStack, bStack))) return false;
       }
     }
     // Remove the first object from the stack of traversed objects.
@@ -2825,8 +2934,8 @@
     return type === 'function' || type === 'object' && !!obj;
   };
 
-  // Add some isType methods: isArguments, isFunction, isString, isNumber, isDate, isRegExp, isError.
-  _.each(['Arguments', 'Function', 'String', 'Number', 'Date', 'RegExp', 'Error'], function(name) {
+  // Add some isType methods: isArguments, isFunction, isString, isNumber, isDate, isRegExp, isError, isMap, isWeakMap, isSet, isWeakSet.
+  _.each(['Arguments', 'Function', 'String', 'Number', 'Date', 'RegExp', 'Error', 'Symbol', 'Map', 'WeakMap', 'Set', 'WeakSet'], function(name) {
     _['is' + name] = function(obj) {
       return toString.call(obj) === '[object ' + name + ']';
     };
@@ -2836,13 +2945,14 @@
   // there isn't any inspectable "Arguments" type.
   if (!_.isArguments(arguments)) {
     _.isArguments = function(obj) {
-      return _.has(obj, 'callee');
+      return has(obj, 'callee');
     };
   }
 
   // Optimize `isFunction` if appropriate. Work around some typeof bugs in old v8,
-  // IE 11 (#1621), and in Safari 8 (#1929).
-  if (typeof /./ != 'function' && typeof Int8Array != 'object') {
+  // IE 11 (#1621), Safari 8 (#1929), and PhantomJS (#2236).
+  var nodelist = root.document && root.document.childNodes;
+  if (typeof /./ != 'function' && typeof Int8Array != 'object' && typeof nodelist != 'function') {
     _.isFunction = function(obj) {
       return typeof obj == 'function' || false;
     };
@@ -2850,12 +2960,12 @@
 
   // Is a given object a finite number?
   _.isFinite = function(obj) {
-    return isFinite(obj) && !isNaN(parseFloat(obj));
+    return !_.isSymbol(obj) && isFinite(obj) && !isNaN(parseFloat(obj));
   };
 
-  // Is the given value `NaN`? (NaN is the only number which does not equal itself).
+  // Is the given value `NaN`?
   _.isNaN = function(obj) {
-    return _.isNumber(obj) && obj !== +obj;
+    return _.isNumber(obj) && isNaN(obj);
   };
 
   // Is a given value a boolean?
@@ -2875,8 +2985,19 @@
 
   // Shortcut function for checking if an object has a given property directly
   // on itself (in other words, not on a prototype).
-  _.has = function(obj, key) {
-    return obj != null && hasOwnProperty.call(obj, key);
+  _.has = function(obj, path) {
+    if (!_.isArray(path)) {
+      return has(obj, path);
+    }
+    var length = path.length;
+    for (var i = 0; i < length; i++) {
+      var key = path[i];
+      if (obj == null || !hasOwnProperty.call(obj, key)) {
+        return false;
+      }
+      obj = obj[key];
+    }
+    return !!length;
   };
 
   // Utility Functions
@@ -2903,12 +3024,24 @@
 
   _.noop = function(){};
 
-  _.property = property;
+  // Creates a function that, when passed an object, will traverse that object’s
+  // properties down the given `path`, specified as an array of keys or indexes.
+  _.property = function(path) {
+    if (!_.isArray(path)) {
+      return shallowProperty(path);
+    }
+    return function(obj) {
+      return deepGet(obj, path);
+    };
+  };
 
   // Generates a function for a given object that returns a given property.
   _.propertyOf = function(obj) {
-    return obj == null ? function(){} : function(key) {
-      return obj[key];
+    if (obj == null) {
+      return function(){};
+    }
+    return function(path) {
+      return !_.isArray(path) ? obj[path] : deepGet(obj, path);
     };
   };
 
@@ -2943,7 +3076,7 @@
     return new Date().getTime();
   };
 
-   // List of HTML entities for escaping.
+  // List of HTML entities for escaping.
   var escapeMap = {
     '&': '&amp;',
     '<': '&lt;',
@@ -2959,7 +3092,7 @@
     var escaper = function(match) {
       return map[match];
     };
-    // Regexes for identifying a key that needs to be escaped
+    // Regexes for identifying a key that needs to be escaped.
     var source = '(?:' + _.keys(map).join('|') + ')';
     var testRegexp = RegExp(source);
     var replaceRegexp = RegExp(source, 'g');
@@ -2971,14 +3104,24 @@
   _.escape = createEscaper(escapeMap);
   _.unescape = createEscaper(unescapeMap);
 
-  // If the value of the named `property` is a function then invoke it with the
-  // `object` as context; otherwise, return it.
-  _.result = function(object, property, fallback) {
-    var value = object == null ? void 0 : object[property];
-    if (value === void 0) {
-      value = fallback;
+  // Traverses the children of `obj` along `path`. If a child is a function, it
+  // is invoked with its parent as context. Returns the value of the final
+  // child, or `fallback` if any child is undefined.
+  _.result = function(obj, path, fallback) {
+    if (!_.isArray(path)) path = [path];
+    var length = path.length;
+    if (!length) {
+      return _.isFunction(fallback) ? fallback.call(obj) : fallback;
     }
-    return _.isFunction(value) ? value.call(object) : value;
+    for (var i = 0; i < length; i++) {
+      var prop = obj == null ? void 0 : obj[path[i]];
+      if (prop === void 0) {
+        prop = fallback;
+        i = length; // Ensure we don't continue iterating.
+      }
+      obj = _.isFunction(prop) ? prop.call(obj) : prop;
+    }
+    return obj;
   };
 
   // Generate a unique integer id (unique within the entire client session).
@@ -2992,9 +3135,9 @@
   // By default, Underscore uses ERB-style template delimiters, change the
   // following template settings to use alternative delimiters.
   _.templateSettings = {
-    evaluate    : /<%([\s\S]+?)%>/g,
-    interpolate : /<%=([\s\S]+?)%>/g,
-    escape      : /<%-([\s\S]+?)%>/g
+    evaluate: /<%([\s\S]+?)%>/g,
+    interpolate: /<%=([\s\S]+?)%>/g,
+    escape: /<%-([\s\S]+?)%>/g
   };
 
   // When customizing `templateSettings`, if you don't want to define an
@@ -3005,15 +3148,15 @@
   // Certain characters need to be escaped so that they can be put into a
   // string literal.
   var escapes = {
-    "'":      "'",
-    '\\':     '\\',
-    '\r':     'r',
-    '\n':     'n',
+    "'": "'",
+    '\\': '\\',
+    '\r': 'r',
+    '\n': 'n',
     '\u2028': 'u2028',
     '\u2029': 'u2029'
   };
 
-  var escaper = /\\|'|\r|\n|\u2028|\u2029/g;
+  var escapeRegExp = /\\|'|\r|\n|\u2028|\u2029/g;
 
   var escapeChar = function(match) {
     return '\\' + escapes[match];
@@ -3038,7 +3181,7 @@
     var index = 0;
     var source = "__p+='";
     text.replace(matcher, function(match, escape, interpolate, evaluate, offset) {
-      source += text.slice(index, offset).replace(escaper, escapeChar);
+      source += text.slice(index, offset).replace(escapeRegExp, escapeChar);
       index = offset + match.length;
 
       if (escape) {
@@ -3049,7 +3192,7 @@
         source += "';\n" + evaluate + "\n__p+='";
       }
 
-      // Adobe VMs need the match returned to produce the correct offest.
+      // Adobe VMs need the match returned to produce the correct offset.
       return match;
     });
     source += "';\n";
@@ -3061,8 +3204,9 @@
       "print=function(){__p+=__j.call(arguments,'');};\n" +
       source + 'return __p;\n';
 
+    var render;
     try {
-      var render = new Function(settings.variable || 'obj', '_', source);
+      render = new Function(settings.variable || 'obj', '_', source);
     } catch (e) {
       e.source = source;
       throw e;
@@ -3093,7 +3237,7 @@
   // underscore functions. Wrapped objects may be chained.
 
   // Helper function to continue chaining intermediate results.
-  var result = function(instance, obj) {
+  var chainResult = function(instance, obj) {
     return instance._chain ? _(obj).chain() : obj;
   };
 
@@ -3104,9 +3248,10 @@
       _.prototype[name] = function() {
         var args = [this._wrapped];
         push.apply(args, arguments);
-        return result(this, func.apply(_, args));
+        return chainResult(this, func.apply(_, args));
       };
     });
+    return _;
   };
 
   // Add all of the Underscore functions to the wrapper object.
@@ -3119,7 +3264,7 @@
       var obj = this._wrapped;
       method.apply(obj, arguments);
       if ((name === 'shift' || name === 'splice') && obj.length === 0) delete obj[0];
-      return result(this, obj);
+      return chainResult(this, obj);
     };
   });
 
@@ -3127,7 +3272,7 @@
   _.each(['concat', 'join', 'slice'], function(name) {
     var method = ArrayProto[name];
     _.prototype[name] = function() {
-      return result(this, method.apply(this._wrapped, arguments));
+      return chainResult(this, method.apply(this._wrapped, arguments));
     };
   });
 
@@ -3141,7 +3286,7 @@
   _.prototype.valueOf = _.prototype.toJSON = _.prototype.value;
 
   _.prototype.toString = function() {
-    return '' + this._wrapped;
+    return String(this._wrapped);
   };
 
   // AMD registration happens at the end for compatibility with AMD loaders
@@ -3151,14 +3296,315 @@
   // popular enough to be bundled in a third party lib, but not be part of
   // an AMD load request. Those cases could generate an error when an
   // anonymous define() is called outside of a loader request.
-  if (typeof define === 'function' && define.amd) {
+  if (typeof define == 'function' && define.amd) {
     define('underscore', [], function() {
       return _;
     });
   }
-}.call(this));
+}());
 
+}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
 },{}],3:[function(require,module,exports){
+(function (process){
+/**
+ * Copyright 2013-2015, Facebook, Inc.
+ * All rights reserved.
+ *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree. An additional grant
+ * of patent rights can be found in the PATENTS file in the same directory.
+ *
+ * @providesModule invariant
+ */
+
+"use strict";
+
+/**
+ * Use invariant() to assert state which your program assumes to be true.
+ *
+ * Provide sprintf-style format (only %s is supported) and arguments
+ * to provide information about what broke and what you were
+ * expecting.
+ *
+ * The invariant message will be stripped in production, but the invariant
+ * will remain to ensure logic does not differ in production.
+ */
+
+var invariant = function (condition, format, a, b, c, d, e, f) {
+  if (process.env.NODE_ENV !== 'production') {
+    if (format === undefined) {
+      throw new Error('invariant requires an error message argument');
+    }
+  }
+
+  if (!condition) {
+    var error;
+    if (format === undefined) {
+      error = new Error('Minified exception occurred; use the non-minified dev environment ' + 'for the full error message and additional helpful warnings.');
+    } else {
+      var args = [a, b, c, d, e, f];
+      var argIndex = 0;
+      error = new Error('Invariant Violation: ' + format.replace(/%s/g, function () {
+        return args[argIndex++];
+      }));
+    }
+
+    error.framesToPop = 1; // we don't care about invariant's own frame
+    throw error;
+  }
+};
+
+module.exports = invariant;
+}).call(this,require('_process'))
+},{"_process":12}],4:[function(require,module,exports){
+/**
+ * Copyright (c) 2014-2015, Facebook, Inc.
+ * All rights reserved.
+ *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree. An additional grant
+ * of patent rights can be found in the PATENTS file in the same directory.
+ */
+
+module.exports.Dispatcher = require('./lib/Dispatcher');
+
+},{"./lib/Dispatcher":5}],5:[function(require,module,exports){
+(function (process){
+/**
+ * Copyright (c) 2014-2015, Facebook, Inc.
+ * All rights reserved.
+ *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree. An additional grant
+ * of patent rights can be found in the PATENTS file in the same directory.
+ *
+ * @providesModule Dispatcher
+ * 
+ * @preventMunge
+ */
+
+'use strict';
+
+exports.__esModule = true;
+
+function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError('Cannot call a class as a function'); } }
+
+var invariant = require('fbjs/lib/invariant');
+
+var _prefix = 'ID_';
+
+/**
+ * Dispatcher is used to broadcast payloads to registered callbacks. This is
+ * different from generic pub-sub systems in two ways:
+ *
+ *   1) Callbacks are not subscribed to particular events. Every payload is
+ *      dispatched to every registered callback.
+ *   2) Callbacks can be deferred in whole or part until other callbacks have
+ *      been executed.
+ *
+ * For example, consider this hypothetical flight destination form, which
+ * selects a default city when a country is selected:
+ *
+ *   var flightDispatcher = new Dispatcher();
+ *
+ *   // Keeps track of which country is selected
+ *   var CountryStore = {country: null};
+ *
+ *   // Keeps track of which city is selected
+ *   var CityStore = {city: null};
+ *
+ *   // Keeps track of the base flight price of the selected city
+ *   var FlightPriceStore = {price: null}
+ *
+ * When a user changes the selected city, we dispatch the payload:
+ *
+ *   flightDispatcher.dispatch({
+ *     actionType: 'city-update',
+ *     selectedCity: 'paris'
+ *   });
+ *
+ * This payload is digested by `CityStore`:
+ *
+ *   flightDispatcher.register(function(payload) {
+ *     if (payload.actionType === 'city-update') {
+ *       CityStore.city = payload.selectedCity;
+ *     }
+ *   });
+ *
+ * When the user selects a country, we dispatch the payload:
+ *
+ *   flightDispatcher.dispatch({
+ *     actionType: 'country-update',
+ *     selectedCountry: 'australia'
+ *   });
+ *
+ * This payload is digested by both stores:
+ *
+ *   CountryStore.dispatchToken = flightDispatcher.register(function(payload) {
+ *     if (payload.actionType === 'country-update') {
+ *       CountryStore.country = payload.selectedCountry;
+ *     }
+ *   });
+ *
+ * When the callback to update `CountryStore` is registered, we save a reference
+ * to the returned token. Using this token with `waitFor()`, we can guarantee
+ * that `CountryStore` is updated before the callback that updates `CityStore`
+ * needs to query its data.
+ *
+ *   CityStore.dispatchToken = flightDispatcher.register(function(payload) {
+ *     if (payload.actionType === 'country-update') {
+ *       // `CountryStore.country` may not be updated.
+ *       flightDispatcher.waitFor([CountryStore.dispatchToken]);
+ *       // `CountryStore.country` is now guaranteed to be updated.
+ *
+ *       // Select the default city for the new country
+ *       CityStore.city = getDefaultCityForCountry(CountryStore.country);
+ *     }
+ *   });
+ *
+ * The usage of `waitFor()` can be chained, for example:
+ *
+ *   FlightPriceStore.dispatchToken =
+ *     flightDispatcher.register(function(payload) {
+ *       switch (payload.actionType) {
+ *         case 'country-update':
+ *         case 'city-update':
+ *           flightDispatcher.waitFor([CityStore.dispatchToken]);
+ *           FlightPriceStore.price =
+ *             getFlightPriceStore(CountryStore.country, CityStore.city);
+ *           break;
+ *     }
+ *   });
+ *
+ * The `country-update` payload will be guaranteed to invoke the stores'
+ * registered callbacks in order: `CountryStore`, `CityStore`, then
+ * `FlightPriceStore`.
+ */
+
+var Dispatcher = (function () {
+  function Dispatcher() {
+    _classCallCheck(this, Dispatcher);
+
+    this._callbacks = {};
+    this._isDispatching = false;
+    this._isHandled = {};
+    this._isPending = {};
+    this._lastID = 1;
+  }
+
+  /**
+   * Registers a callback to be invoked with every dispatched payload. Returns
+   * a token that can be used with `waitFor()`.
+   */
+
+  Dispatcher.prototype.register = function register(callback) {
+    var id = _prefix + this._lastID++;
+    this._callbacks[id] = callback;
+    return id;
+  };
+
+  /**
+   * Removes a callback based on its token.
+   */
+
+  Dispatcher.prototype.unregister = function unregister(id) {
+    !this._callbacks[id] ? process.env.NODE_ENV !== 'production' ? invariant(false, 'Dispatcher.unregister(...): `%s` does not map to a registered callback.', id) : invariant(false) : undefined;
+    delete this._callbacks[id];
+  };
+
+  /**
+   * Waits for the callbacks specified to be invoked before continuing execution
+   * of the current callback. This method should only be used by a callback in
+   * response to a dispatched payload.
+   */
+
+  Dispatcher.prototype.waitFor = function waitFor(ids) {
+    !this._isDispatching ? process.env.NODE_ENV !== 'production' ? invariant(false, 'Dispatcher.waitFor(...): Must be invoked while dispatching.') : invariant(false) : undefined;
+    for (var ii = 0; ii < ids.length; ii++) {
+      var id = ids[ii];
+      if (this._isPending[id]) {
+        !this._isHandled[id] ? process.env.NODE_ENV !== 'production' ? invariant(false, 'Dispatcher.waitFor(...): Circular dependency detected while ' + 'waiting for `%s`.', id) : invariant(false) : undefined;
+        continue;
+      }
+      !this._callbacks[id] ? process.env.NODE_ENV !== 'production' ? invariant(false, 'Dispatcher.waitFor(...): `%s` does not map to a registered callback.', id) : invariant(false) : undefined;
+      this._invokeCallback(id);
+    }
+  };
+
+  /**
+   * Dispatches a payload to all registered callbacks.
+   */
+
+  Dispatcher.prototype.dispatch = function dispatch(payload) {
+    !!this._isDispatching ? process.env.NODE_ENV !== 'production' ? invariant(false, 'Dispatch.dispatch(...): Cannot dispatch in the middle of a dispatch.') : invariant(false) : undefined;
+    this._startDispatching(payload);
+    try {
+      for (var id in this._callbacks) {
+        if (this._isPending[id]) {
+          continue;
+        }
+        this._invokeCallback(id);
+      }
+    } finally {
+      this._stopDispatching();
+    }
+  };
+
+  /**
+   * Is this Dispatcher currently dispatching.
+   */
+
+  Dispatcher.prototype.isDispatching = function isDispatching() {
+    return this._isDispatching;
+  };
+
+  /**
+   * Call the callback stored with the given id. Also do some internal
+   * bookkeeping.
+   *
+   * @internal
+   */
+
+  Dispatcher.prototype._invokeCallback = function _invokeCallback(id) {
+    this._isPending[id] = true;
+    this._callbacks[id](this._pendingPayload);
+    this._isHandled[id] = true;
+  };
+
+  /**
+   * Set up bookkeeping needed when dispatching.
+   *
+   * @internal
+   */
+
+  Dispatcher.prototype._startDispatching = function _startDispatching(payload) {
+    for (var id in this._callbacks) {
+      this._isPending[id] = false;
+      this._isHandled[id] = false;
+    }
+    this._pendingPayload = payload;
+    this._isDispatching = true;
+  };
+
+  /**
+   * Clear bookkeeping used for dispatching.
+   *
+   * @internal
+   */
+
+  Dispatcher.prototype._stopDispatching = function _stopDispatching() {
+    delete this._pendingPayload;
+    this._isDispatching = false;
+  };
+
+  return Dispatcher;
+})();
+
+module.exports = Dispatcher;
+}).call(this,require('_process'))
+},{"_process":12,"fbjs/lib/invariant":3}],6:[function(require,module,exports){
+
+},{}],7:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -3461,333 +3907,37 @@ function isUndefined(arg) {
   return arg === void 0;
 }
 
-},{}],4:[function(require,module,exports){
-/**
- * Copyright (c) 2014, Facebook, Inc.
- * All rights reserved.
- *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
- */
-
-module.exports.Dispatcher = require('./lib/Dispatcher')
-
-},{"./lib/Dispatcher":5}],5:[function(require,module,exports){
-/*
- * Copyright (c) 2014, Facebook, Inc.
- * All rights reserved.
- *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
- *
- * @providesModule Dispatcher
- * @typechecks
- */
-
-"use strict";
-
-var invariant = require('./invariant');
-
-var _lastID = 1;
-var _prefix = 'ID_';
-
-/**
- * Dispatcher is used to broadcast payloads to registered callbacks. This is
- * different from generic pub-sub systems in two ways:
- *
- *   1) Callbacks are not subscribed to particular events. Every payload is
- *      dispatched to every registered callback.
- *   2) Callbacks can be deferred in whole or part until other callbacks have
- *      been executed.
- *
- * For example, consider this hypothetical flight destination form, which
- * selects a default city when a country is selected:
- *
- *   var flightDispatcher = new Dispatcher();
- *
- *   // Keeps track of which country is selected
- *   var CountryStore = {country: null};
- *
- *   // Keeps track of which city is selected
- *   var CityStore = {city: null};
- *
- *   // Keeps track of the base flight price of the selected city
- *   var FlightPriceStore = {price: null}
- *
- * When a user changes the selected city, we dispatch the payload:
- *
- *   flightDispatcher.dispatch({
- *     actionType: 'city-update',
- *     selectedCity: 'paris'
- *   });
- *
- * This payload is digested by `CityStore`:
- *
- *   flightDispatcher.register(function(payload) {
- *     if (payload.actionType === 'city-update') {
- *       CityStore.city = payload.selectedCity;
- *     }
- *   });
- *
- * When the user selects a country, we dispatch the payload:
- *
- *   flightDispatcher.dispatch({
- *     actionType: 'country-update',
- *     selectedCountry: 'australia'
- *   });
- *
- * This payload is digested by both stores:
- *
- *    CountryStore.dispatchToken = flightDispatcher.register(function(payload) {
- *     if (payload.actionType === 'country-update') {
- *       CountryStore.country = payload.selectedCountry;
- *     }
- *   });
- *
- * When the callback to update `CountryStore` is registered, we save a reference
- * to the returned token. Using this token with `waitFor()`, we can guarantee
- * that `CountryStore` is updated before the callback that updates `CityStore`
- * needs to query its data.
- *
- *   CityStore.dispatchToken = flightDispatcher.register(function(payload) {
- *     if (payload.actionType === 'country-update') {
- *       // `CountryStore.country` may not be updated.
- *       flightDispatcher.waitFor([CountryStore.dispatchToken]);
- *       // `CountryStore.country` is now guaranteed to be updated.
- *
- *       // Select the default city for the new country
- *       CityStore.city = getDefaultCityForCountry(CountryStore.country);
- *     }
- *   });
- *
- * The usage of `waitFor()` can be chained, for example:
- *
- *   FlightPriceStore.dispatchToken =
- *     flightDispatcher.register(function(payload) {
- *       switch (payload.actionType) {
- *         case 'country-update':
- *           flightDispatcher.waitFor([CityStore.dispatchToken]);
- *           FlightPriceStore.price =
- *             getFlightPriceStore(CountryStore.country, CityStore.city);
- *           break;
- *
- *         case 'city-update':
- *           FlightPriceStore.price =
- *             FlightPriceStore(CountryStore.country, CityStore.city);
- *           break;
- *     }
- *   });
- *
- * The `country-update` payload will be guaranteed to invoke the stores'
- * registered callbacks in order: `CountryStore`, `CityStore`, then
- * `FlightPriceStore`.
- */
-
-  function Dispatcher() {
-    this.$Dispatcher_callbacks = {};
-    this.$Dispatcher_isPending = {};
-    this.$Dispatcher_isHandled = {};
-    this.$Dispatcher_isDispatching = false;
-    this.$Dispatcher_pendingPayload = null;
-  }
-
-  /**
-   * Registers a callback to be invoked with every dispatched payload. Returns
-   * a token that can be used with `waitFor()`.
-   *
-   * @param {function} callback
-   * @return {string}
-   */
-  Dispatcher.prototype.register=function(callback) {
-    var id = _prefix + _lastID++;
-    this.$Dispatcher_callbacks[id] = callback;
-    return id;
-  };
-
-  /**
-   * Removes a callback based on its token.
-   *
-   * @param {string} id
-   */
-  Dispatcher.prototype.unregister=function(id) {
-    invariant(
-      this.$Dispatcher_callbacks[id],
-      'Dispatcher.unregister(...): `%s` does not map to a registered callback.',
-      id
-    );
-    delete this.$Dispatcher_callbacks[id];
-  };
-
-  /**
-   * Waits for the callbacks specified to be invoked before continuing execution
-   * of the current callback. This method should only be used by a callback in
-   * response to a dispatched payload.
-   *
-   * @param {array<string>} ids
-   */
-  Dispatcher.prototype.waitFor=function(ids) {
-    invariant(
-      this.$Dispatcher_isDispatching,
-      'Dispatcher.waitFor(...): Must be invoked while dispatching.'
-    );
-    for (var ii = 0; ii < ids.length; ii++) {
-      var id = ids[ii];
-      if (this.$Dispatcher_isPending[id]) {
-        invariant(
-          this.$Dispatcher_isHandled[id],
-          'Dispatcher.waitFor(...): Circular dependency detected while ' +
-          'waiting for `%s`.',
-          id
-        );
-        continue;
-      }
-      invariant(
-        this.$Dispatcher_callbacks[id],
-        'Dispatcher.waitFor(...): `%s` does not map to a registered callback.',
-        id
-      );
-      this.$Dispatcher_invokeCallback(id);
-    }
-  };
-
-  /**
-   * Dispatches a payload to all registered callbacks.
-   *
-   * @param {object} payload
-   */
-  Dispatcher.prototype.dispatch=function(payload) {
-    invariant(
-      !this.$Dispatcher_isDispatching,
-      'Dispatch.dispatch(...): Cannot dispatch in the middle of a dispatch.'
-    );
-    this.$Dispatcher_startDispatching(payload);
-    try {
-      for (var id in this.$Dispatcher_callbacks) {
-        if (this.$Dispatcher_isPending[id]) {
-          continue;
-        }
-        this.$Dispatcher_invokeCallback(id);
-      }
-    } finally {
-      this.$Dispatcher_stopDispatching();
-    }
-  };
-
-  /**
-   * Is this Dispatcher currently dispatching.
-   *
-   * @return {boolean}
-   */
-  Dispatcher.prototype.isDispatching=function() {
-    return this.$Dispatcher_isDispatching;
-  };
-
-  /**
-   * Call the callback stored with the given id. Also do some internal
-   * bookkeeping.
-   *
-   * @param {string} id
-   * @internal
-   */
-  Dispatcher.prototype.$Dispatcher_invokeCallback=function(id) {
-    this.$Dispatcher_isPending[id] = true;
-    this.$Dispatcher_callbacks[id](this.$Dispatcher_pendingPayload);
-    this.$Dispatcher_isHandled[id] = true;
-  };
-
-  /**
-   * Set up bookkeeping needed when dispatching.
-   *
-   * @param {object} payload
-   * @internal
-   */
-  Dispatcher.prototype.$Dispatcher_startDispatching=function(payload) {
-    for (var id in this.$Dispatcher_callbacks) {
-      this.$Dispatcher_isPending[id] = false;
-      this.$Dispatcher_isHandled[id] = false;
-    }
-    this.$Dispatcher_pendingPayload = payload;
-    this.$Dispatcher_isDispatching = true;
-  };
-
-  /**
-   * Clear bookkeeping used for dispatching.
-   *
-   * @internal
-   */
-  Dispatcher.prototype.$Dispatcher_stopDispatching=function() {
-    this.$Dispatcher_pendingPayload = null;
-    this.$Dispatcher_isDispatching = false;
-  };
-
-
-module.exports = Dispatcher;
-
-},{"./invariant":6}],6:[function(require,module,exports){
-/**
- * Copyright (c) 2014, Facebook, Inc.
- * All rights reserved.
- *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree. An additional grant
- * of patent rights can be found in the PATENTS file in the same directory.
- *
- * @providesModule invariant
- */
-
-"use strict";
-
-/**
- * Use invariant() to assert state which your program assumes to be true.
- *
- * Provide sprintf-style format (only %s is supported) and arguments
- * to provide information about what broke and what you were
- * expecting.
- *
- * The invariant message will be stripped in production, but the invariant
- * will remain to ensure logic does not differ in production.
- */
-
-var invariant = function(condition, format, a, b, c, d, e, f) {
-  if (false) {
-    if (format === undefined) {
-      throw new Error('invariant requires an error message argument');
-    }
-  }
-
-  if (!condition) {
-    var error;
-    if (format === undefined) {
-      error = new Error(
-        'Minified exception occurred; use the non-minified dev environment ' +
-        'for the full error message and additional helpful warnings.'
-      );
-    } else {
-      var args = [a, b, c, d, e, f];
-      var argIndex = 0;
-      error = new Error(
-        'Invariant Violation: ' +
-        format.replace(/%s/g, function() { return args[argIndex++]; })
-      );
-    }
-
-    error.framesToPop = 1; // we don't care about invariant's own frame
-    throw error;
-  }
-};
-
-module.exports = invariant;
-
-},{}],7:[function(require,module,exports){
-
 },{}],8:[function(require,module,exports){
+if (typeof Object.create === 'function') {
+  // implementation from standard node.js 'util' module
+  module.exports = function inherits(ctor, superCtor) {
+    ctor.super_ = superCtor
+    ctor.prototype = Object.create(superCtor.prototype, {
+      constructor: {
+        value: ctor,
+        enumerable: false,
+        writable: true,
+        configurable: true
+      }
+    });
+  };
+} else {
+  // old school shim for old browsers
+  module.exports = function inherits(ctor, superCtor) {
+    ctor.super_ = superCtor
+    var TempCtor = function () {}
+    TempCtor.prototype = superCtor.prototype
+    ctor.prototype = new TempCtor()
+    ctor.prototype.constructor = ctor
+  }
+}
+
+},{}],9:[function(require,module,exports){
 // super simple module for the most common nodejs use case.
 exports.markdown = require("./markdown");
 exports.parse = exports.markdown.toHTML;
 
-},{"./markdown":9}],9:[function(require,module,exports){
+},{"./markdown":10}],10:[function(require,module,exports){
 // Released under MIT license
 // Copyright (c) 2009-2010 Dominic Baggott
 // Copyright (c) 2009-2010 Ash Berlin
@@ -5405,35 +5555,99 @@ function merge_text_nodes( jsonml ) {
   }
 } )() );
 
-},{"util":171}],10:[function(require,module,exports){
-'use strict';
+},{"util":171}],11:[function(require,module,exports){
+/*
+object-assign
+(c) Sindre Sorhus
+@license MIT
+*/
 
-function ToObject(val) {
-	if (val == null) {
+'use strict';
+/* eslint-disable no-unused-vars */
+var getOwnPropertySymbols = Object.getOwnPropertySymbols;
+var hasOwnProperty = Object.prototype.hasOwnProperty;
+var propIsEnumerable = Object.prototype.propertyIsEnumerable;
+
+function toObject(val) {
+	if (val === null || val === undefined) {
 		throw new TypeError('Object.assign cannot be called with null or undefined');
 	}
 
 	return Object(val);
 }
 
-module.exports = Object.assign || function (target, source) {
+function shouldUseNative() {
+	try {
+		if (!Object.assign) {
+			return false;
+		}
+
+		// Detect buggy property enumeration order in older V8 versions.
+
+		// https://bugs.chromium.org/p/v8/issues/detail?id=4118
+		var test1 = new String('abc');  // eslint-disable-line no-new-wrappers
+		test1[5] = 'de';
+		if (Object.getOwnPropertyNames(test1)[0] === '5') {
+			return false;
+		}
+
+		// https://bugs.chromium.org/p/v8/issues/detail?id=3056
+		var test2 = {};
+		for (var i = 0; i < 10; i++) {
+			test2['_' + String.fromCharCode(i)] = i;
+		}
+		var order2 = Object.getOwnPropertyNames(test2).map(function (n) {
+			return test2[n];
+		});
+		if (order2.join('') !== '0123456789') {
+			return false;
+		}
+
+		// https://bugs.chromium.org/p/v8/issues/detail?id=3056
+		var test3 = {};
+		'abcdefghijklmnopqrst'.split('').forEach(function (letter) {
+			test3[letter] = letter;
+		});
+		if (Object.keys(Object.assign({}, test3)).join('') !==
+				'abcdefghijklmnopqrst') {
+			return false;
+		}
+
+		return true;
+	} catch (err) {
+		// We don't expect any of the above to throw, but better to be safe.
+		return false;
+	}
+}
+
+module.exports = shouldUseNative() ? Object.assign : function (target, source) {
 	var from;
-	var keys;
-	var to = ToObject(target);
+	var to = toObject(target);
+	var symbols;
 
 	for (var s = 1; s < arguments.length; s++) {
-		from = arguments[s];
-		keys = Object.keys(Object(from));
+		from = Object(arguments[s]);
 
-		for (var i = 0; i < keys.length; i++) {
-			to[keys[i]] = from[keys[i]];
+		for (var key in from) {
+			if (hasOwnProperty.call(from, key)) {
+				to[key] = from[key];
+			}
+		}
+
+		if (getOwnPropertySymbols) {
+			symbols = getOwnPropertySymbols(from);
+			for (var i = 0; i < symbols.length; i++) {
+				if (propIsEnumerable.call(from, symbols[i])) {
+					to[symbols[i]] = from[symbols[i]];
+				}
+			}
 		}
 	}
 
 	return to;
 };
 
-},{}],11:[function(require,module,exports){
+},{}],12:[function(require,module,exports){
 // shim for using process in browser
 var process = module.exports = {};
 
@@ -5619,7 +5833,7 @@ process.chdir = function (dir) {
 };
 process.umask = function() { return 0; };
 
-},{}],12:[function(require,module,exports){
+},{}],13:[function(require,module,exports){
 (function (process){
 // vim:ts=4:sts=4:sw=4:
 /*!
@@ -7192,7 +7406,7 @@ var qEndingLine = captureLine();
 });
 
 }).call(this,require('_process'))
-},{"_process":11}],13:[function(require,module,exports){
+},{"_process":12}],14:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -7219,7 +7433,7 @@ var AutoFocusMixin = {
 
 module.exports = AutoFocusMixin;
 
-},{"./focusNode":131}],14:[function(require,module,exports){
+},{"./focusNode":132}],15:[function(require,module,exports){
 /**
  * Copyright 2013-2015 Facebook, Inc.
  * All rights reserved.
@@ -7714,7 +7928,7 @@ var BeforeInputEventPlugin = {
 
 module.exports = BeforeInputEventPlugin;
 
-},{"./EventConstants":26,"./EventPropagators":31,"./ExecutionEnvironment":32,"./FallbackCompositionState":33,"./SyntheticCompositionEvent":105,"./SyntheticInputEvent":109,"./keyOf":153}],15:[function(require,module,exports){
+},{"./EventConstants":27,"./EventPropagators":32,"./ExecutionEnvironment":33,"./FallbackCompositionState":34,"./SyntheticCompositionEvent":106,"./SyntheticInputEvent":110,"./keyOf":154}],16:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -7737,7 +7951,9 @@ var isUnitlessNumber = {
   columnCount: true,
   flex: true,
   flexGrow: true,
+  flexPositive: true,
   flexShrink: true,
+  flexNegative: true,
   fontWeight: true,
   lineClamp: true,
   lineHeight: true,
@@ -7750,7 +7966,9 @@ var isUnitlessNumber = {
 
   // SVG-related properties
   fillOpacity: true,
-  strokeOpacity: true
+  strokeDashoffset: true,
+  strokeOpacity: true,
+  strokeWidth: true
 };
 
 /**
@@ -7835,7 +8053,8 @@ var CSSProperty = {
 
 module.exports = CSSProperty;
 
-},{}],16:[function(require,module,exports){
+},{}],17:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -7871,7 +8090,7 @@ if (ExecutionEnvironment.canUseDOM) {
   }
 }
 
-if ("production" !== "production") {
+if ("production" !== process.env.NODE_ENV) {
   // 'msTransform' is correct, but the other prefixes should be capitalized
   var badVendoredStyleNamePattern = /^(?:webkit|moz|o)[A-Z]/;
 
@@ -7887,7 +8106,7 @@ if ("production" !== "production") {
     }
 
     warnedStyleNames[name] = true;
-    ("production" !== "production" ? warning(
+    ("production" !== process.env.NODE_ENV ? warning(
       false,
       'Unsupported style property %s. Did you mean %s?',
       name,
@@ -7901,7 +8120,7 @@ if ("production" !== "production") {
     }
 
     warnedStyleNames[name] = true;
-    ("production" !== "production" ? warning(
+    ("production" !== process.env.NODE_ENV ? warning(
       false,
       'Unsupported vendor-prefixed style property %s. Did you mean %s?',
       name,
@@ -7915,7 +8134,7 @@ if ("production" !== "production") {
     }
 
     warnedStyleValues[value] = true;
-    ("production" !== "production" ? warning(
+    ("production" !== process.env.NODE_ENV ? warning(
       false,
       'Style property values shouldn\'t contain a semicolon. ' +
       'Try "%s: %s" instead.',
@@ -7963,7 +8182,7 @@ var CSSPropertyOperations = {
         continue;
       }
       var styleValue = styles[styleName];
-      if ("production" !== "production") {
+      if ("production" !== process.env.NODE_ENV) {
         warnValidStyle(styleName, styleValue);
       }
       if (styleValue != null) {
@@ -7987,7 +8206,7 @@ var CSSPropertyOperations = {
       if (!styles.hasOwnProperty(styleName)) {
         continue;
       }
-      if ("production" !== "production") {
+      if ("production" !== process.env.NODE_ENV) {
         warnValidStyle(styleName, styles[styleName]);
       }
       var styleValue = dangerousStyleValue(styleName, styles[styleName]);
@@ -8015,7 +8234,9 @@ var CSSPropertyOperations = {
 
 module.exports = CSSPropertyOperations;
 
-},{"./CSSProperty":15,"./ExecutionEnvironment":32,"./camelizeStyleName":120,"./dangerousStyleValue":125,"./hyphenateStyleName":145,"./memoizeStringOnly":155,"./warning":166}],17:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./CSSProperty":16,"./ExecutionEnvironment":33,"./camelizeStyleName":121,"./dangerousStyleValue":126,"./hyphenateStyleName":146,"./memoizeStringOnly":156,"./warning":167,"_process":12}],18:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -8076,7 +8297,7 @@ assign(CallbackQueue.prototype, {
     var callbacks = this._callbacks;
     var contexts = this._contexts;
     if (callbacks) {
-      ("production" !== "production" ? invariant(
+      ("production" !== process.env.NODE_ENV ? invariant(
         callbacks.length === contexts.length,
         'Mismatched list of contexts in callback queue'
       ) : invariant(callbacks.length === contexts.length));
@@ -8113,7 +8334,8 @@ PooledClass.addPoolingTo(CallbackQueue);
 
 module.exports = CallbackQueue;
 
-},{"./Object.assign":38,"./PooledClass":39,"./invariant":147}],18:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./Object.assign":39,"./PooledClass":40,"./invariant":148,"_process":12}],19:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -8495,7 +8717,7 @@ var ChangeEventPlugin = {
 
 module.exports = ChangeEventPlugin;
 
-},{"./EventConstants":26,"./EventPluginHub":28,"./EventPropagators":31,"./ExecutionEnvironment":32,"./ReactUpdates":99,"./SyntheticEvent":107,"./isEventSupported":148,"./isTextInputElement":150,"./keyOf":153}],19:[function(require,module,exports){
+},{"./EventConstants":27,"./EventPluginHub":29,"./EventPropagators":32,"./ExecutionEnvironment":33,"./ReactUpdates":100,"./SyntheticEvent":108,"./isEventSupported":149,"./isTextInputElement":151,"./keyOf":154}],20:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -8520,7 +8742,8 @@ var ClientReactRootIndex = {
 
 module.exports = ClientReactRootIndex;
 
-},{}],20:[function(require,module,exports){
+},{}],21:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -8592,7 +8815,7 @@ var DOMChildrenOperations = {
         var updatedChild = update.parentNode.childNodes[updatedIndex];
         var parentID = update.parentID;
 
-        ("production" !== "production" ? invariant(
+        ("production" !== process.env.NODE_ENV ? invariant(
           updatedChild,
           'processUpdates(): Unable to find child %s of element. This ' +
           'probably means the DOM was unexpectedly mutated (e.g., by the ' +
@@ -8656,7 +8879,9 @@ var DOMChildrenOperations = {
 
 module.exports = DOMChildrenOperations;
 
-},{"./Danger":23,"./ReactMultiChildUpdateTypes":84,"./invariant":147,"./setTextContent":161}],21:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./Danger":24,"./ReactMultiChildUpdateTypes":85,"./invariant":148,"./setTextContent":162,"_process":12}],22:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -8730,7 +8955,7 @@ var DOMPropertyInjection = {
     }
 
     for (var propName in Properties) {
-      ("production" !== "production" ? invariant(
+      ("production" !== process.env.NODE_ENV ? invariant(
         !DOMProperty.isStandardName.hasOwnProperty(propName),
         'injectDOMPropertyConfig(...): You\'re trying to inject DOM property ' +
         '\'%s\' which has already been injected. You may be accidentally ' +
@@ -8779,21 +9004,21 @@ var DOMPropertyInjection = {
       DOMProperty.hasOverloadedBooleanValue[propName] =
         checkMask(propConfig, DOMPropertyInjection.HAS_OVERLOADED_BOOLEAN_VALUE);
 
-      ("production" !== "production" ? invariant(
+      ("production" !== process.env.NODE_ENV ? invariant(
         !DOMProperty.mustUseAttribute[propName] ||
           !DOMProperty.mustUseProperty[propName],
         'DOMProperty: Cannot require using both attribute and property: %s',
         propName
       ) : invariant(!DOMProperty.mustUseAttribute[propName] ||
         !DOMProperty.mustUseProperty[propName]));
-      ("production" !== "production" ? invariant(
+      ("production" !== process.env.NODE_ENV ? invariant(
         DOMProperty.mustUseProperty[propName] ||
           !DOMProperty.hasSideEffects[propName],
         'DOMProperty: Properties that have side effects must use property: %s',
         propName
       ) : invariant(DOMProperty.mustUseProperty[propName] ||
         !DOMProperty.hasSideEffects[propName]));
-      ("production" !== "production" ? invariant(
+      ("production" !== process.env.NODE_ENV ? invariant(
         !!DOMProperty.hasBooleanValue[propName] +
           !!DOMProperty.hasNumericValue[propName] +
           !!DOMProperty.hasOverloadedBooleanValue[propName] <= 1,
@@ -8953,7 +9178,9 @@ var DOMProperty = {
 
 module.exports = DOMProperty;
 
-},{"./invariant":147}],22:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./invariant":148,"_process":12}],23:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -8981,7 +9208,7 @@ function shouldIgnoreValue(name, value) {
     (DOMProperty.hasOverloadedBooleanValue[name] && value === false);
 }
 
-if ("production" !== "production") {
+if ("production" !== process.env.NODE_ENV) {
   var reactProps = {
     children: true,
     dangerouslySetInnerHTML: true,
@@ -9010,7 +9237,7 @@ if ("production" !== "production") {
 
     // For now, only warn when we have a suggested correction. This prevents
     // logging too much when using transferPropsTo.
-    ("production" !== "production" ? warning(
+    ("production" !== process.env.NODE_ENV ? warning(
       standardName == null,
       'Unknown DOM property %s. Did you mean %s?',
       name,
@@ -9060,7 +9287,7 @@ var DOMPropertyOperations = {
         return '';
       }
       return name + '=' + quoteAttributeValueForBrowser(value);
-    } else if ("production" !== "production") {
+    } else if ("production" !== process.env.NODE_ENV) {
       warnUnknownProperty(name);
     }
     return null;
@@ -9102,7 +9329,7 @@ var DOMPropertyOperations = {
       } else {
         node.setAttribute(name, '' + value);
       }
-    } else if ("production" !== "production") {
+    } else if ("production" !== process.env.NODE_ENV) {
       warnUnknownProperty(name);
     }
   },
@@ -9134,7 +9361,7 @@ var DOMPropertyOperations = {
       }
     } else if (DOMProperty.isCustomAttribute(name)) {
       node.removeAttribute(name);
-    } else if ("production" !== "production") {
+    } else if ("production" !== process.env.NODE_ENV) {
       warnUnknownProperty(name);
     }
   }
@@ -9143,7 +9370,9 @@ var DOMPropertyOperations = {
 
 module.exports = DOMPropertyOperations;
 
-},{"./DOMProperty":21,"./quoteAttributeValueForBrowser":159,"./warning":166}],23:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./DOMProperty":22,"./quoteAttributeValueForBrowser":160,"./warning":167,"_process":12}],24:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -9197,7 +9426,7 @@ var Danger = {
    * @internal
    */
   dangerouslyRenderMarkup: function(markupList) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       ExecutionEnvironment.canUseDOM,
       'dangerouslyRenderMarkup(...): Cannot render markup in a worker ' +
       'thread. Make sure `window` and `document` are available globally ' +
@@ -9208,7 +9437,7 @@ var Danger = {
     var markupByNodeName = {};
     // Group markup by `nodeName` if a wrap is necessary, else by '*'.
     for (var i = 0; i < markupList.length; i++) {
-      ("production" !== "production" ? invariant(
+      ("production" !== process.env.NODE_ENV ? invariant(
         markupList[i],
         'dangerouslyRenderMarkup(...): Missing markup.'
       ) : invariant(markupList[i]));
@@ -9258,7 +9487,7 @@ var Danger = {
           resultIndex = +renderNode.getAttribute(RESULT_INDEX_ATTR);
           renderNode.removeAttribute(RESULT_INDEX_ATTR);
 
-          ("production" !== "production" ? invariant(
+          ("production" !== process.env.NODE_ENV ? invariant(
             !resultList.hasOwnProperty(resultIndex),
             'Danger: Assigning to an already-occupied result index.'
           ) : invariant(!resultList.hasOwnProperty(resultIndex)));
@@ -9269,7 +9498,7 @@ var Danger = {
           // we're done.
           resultListAssignmentCount += 1;
 
-        } else if ("production" !== "production") {
+        } else if ("production" !== process.env.NODE_ENV) {
           console.error(
             'Danger: Discarding unexpected node:',
             renderNode
@@ -9280,12 +9509,12 @@ var Danger = {
 
     // Although resultList was populated out of order, it should now be a dense
     // array.
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       resultListAssignmentCount === resultList.length,
       'Danger: Did not assign to every index of resultList.'
     ) : invariant(resultListAssignmentCount === resultList.length));
 
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       resultList.length === markupList.length,
       'Danger: Expected markup to render %s nodes, but rendered %s.',
       markupList.length,
@@ -9304,15 +9533,15 @@ var Danger = {
    * @internal
    */
   dangerouslyReplaceNodeWithMarkup: function(oldChild, markup) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       ExecutionEnvironment.canUseDOM,
       'dangerouslyReplaceNodeWithMarkup(...): Cannot render markup in a ' +
       'worker thread. Make sure `window` and `document` are available ' +
       'globally before requiring React when unit testing or use ' +
       'React.renderToString for server rendering.'
     ) : invariant(ExecutionEnvironment.canUseDOM));
-    ("production" !== "production" ? invariant(markup, 'dangerouslyReplaceNodeWithMarkup(...): Missing markup.') : invariant(markup));
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(markup, 'dangerouslyReplaceNodeWithMarkup(...): Missing markup.') : invariant(markup));
+    ("production" !== process.env.NODE_ENV ? invariant(
       oldChild.tagName.toLowerCase() !== 'html',
       'dangerouslyReplaceNodeWithMarkup(...): Cannot replace markup of the ' +
       '<html> node. This is because browser quirks make this unreliable ' +
@@ -9328,7 +9557,8 @@ var Danger = {
 
 module.exports = Danger;
 
-},{"./ExecutionEnvironment":32,"./createNodesFromMarkup":124,"./emptyFunction":126,"./getMarkupWrap":139,"./invariant":147}],24:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ExecutionEnvironment":33,"./createNodesFromMarkup":125,"./emptyFunction":127,"./getMarkupWrap":140,"./invariant":148,"_process":12}],25:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -9367,7 +9597,7 @@ var DefaultEventPluginOrder = [
 
 module.exports = DefaultEventPluginOrder;
 
-},{"./keyOf":153}],25:[function(require,module,exports){
+},{"./keyOf":154}],26:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -9507,7 +9737,7 @@ var EnterLeaveEventPlugin = {
 
 module.exports = EnterLeaveEventPlugin;
 
-},{"./EventConstants":26,"./EventPropagators":31,"./ReactMount":82,"./SyntheticMouseEvent":111,"./keyOf":153}],26:[function(require,module,exports){
+},{"./EventConstants":27,"./EventPropagators":32,"./ReactMount":83,"./SyntheticMouseEvent":112,"./keyOf":154}],27:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -9579,7 +9809,8 @@ var EventConstants = {
 
 module.exports = EventConstants;
 
-},{"./keyMirror":152}],27:[function(require,module,exports){
+},{"./keyMirror":153}],28:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  *
@@ -9642,7 +9873,7 @@ var EventListener = {
    */
   capture: function(target, eventType, callback) {
     if (!target.addEventListener) {
-      if ("production" !== "production") {
+      if ("production" !== process.env.NODE_ENV) {
         console.error(
           'Attempted to listen to events during the capture phase on a ' +
           'browser that does not support the capture phase. Your application ' +
@@ -9667,7 +9898,9 @@ var EventListener = {
 
 module.exports = EventListener;
 
-},{"./emptyFunction":126}],28:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./emptyFunction":127,"_process":12}],29:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -9732,7 +9965,7 @@ function validateInstanceHandle() {
     InstanceHandle &&
     InstanceHandle.traverseTwoPhase &&
     InstanceHandle.traverseEnterLeave;
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     valid,
     'InstanceHandle not injected before use!'
   ) : invariant(valid));
@@ -9779,13 +10012,13 @@ var EventPluginHub = {
      */
     injectInstanceHandle: function(InjectedInstanceHandle) {
       InstanceHandle = InjectedInstanceHandle;
-      if ("production" !== "production") {
+      if ("production" !== process.env.NODE_ENV) {
         validateInstanceHandle();
       }
     },
 
     getInstanceHandle: function() {
-      if ("production" !== "production") {
+      if ("production" !== process.env.NODE_ENV) {
         validateInstanceHandle();
       }
       return InstanceHandle;
@@ -9816,7 +10049,7 @@ var EventPluginHub = {
    * @param {?function} listener The callback to store.
    */
   putListener: function(id, registrationName, listener) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       !listener || typeof listener === 'function',
       'Expected %s listener to be a function, instead got type %s',
       registrationName, typeof listener
@@ -9921,7 +10154,7 @@ var EventPluginHub = {
     var processingEventQueue = eventQueue;
     eventQueue = null;
     forEachAccumulated(processingEventQueue, executeDispatchesAndRelease);
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       !eventQueue,
       'processEventQueue(): Additional events were enqueued while processing ' +
       'an event queue. Support for this has not yet been implemented.'
@@ -9943,7 +10176,9 @@ var EventPluginHub = {
 
 module.exports = EventPluginHub;
 
-},{"./EventPluginRegistry":29,"./EventPluginUtils":30,"./accumulateInto":117,"./forEachAccumulated":132,"./invariant":147}],29:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./EventPluginRegistry":30,"./EventPluginUtils":31,"./accumulateInto":118,"./forEachAccumulated":133,"./invariant":148,"_process":12}],30:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -9983,7 +10218,7 @@ function recomputePluginOrdering() {
   for (var pluginName in namesToPlugins) {
     var PluginModule = namesToPlugins[pluginName];
     var pluginIndex = EventPluginOrder.indexOf(pluginName);
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       pluginIndex > -1,
       'EventPluginRegistry: Cannot inject event plugins that do not exist in ' +
       'the plugin ordering, `%s`.',
@@ -9992,7 +10227,7 @@ function recomputePluginOrdering() {
     if (EventPluginRegistry.plugins[pluginIndex]) {
       continue;
     }
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       PluginModule.extractEvents,
       'EventPluginRegistry: Event plugins must implement an `extractEvents` ' +
       'method, but `%s` does not.',
@@ -10001,7 +10236,7 @@ function recomputePluginOrdering() {
     EventPluginRegistry.plugins[pluginIndex] = PluginModule;
     var publishedEvents = PluginModule.eventTypes;
     for (var eventName in publishedEvents) {
-      ("production" !== "production" ? invariant(
+      ("production" !== process.env.NODE_ENV ? invariant(
         publishEventForPlugin(
           publishedEvents[eventName],
           PluginModule,
@@ -10028,7 +10263,7 @@ function recomputePluginOrdering() {
  * @private
  */
 function publishEventForPlugin(dispatchConfig, PluginModule, eventName) {
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     !EventPluginRegistry.eventNameDispatchConfigs.hasOwnProperty(eventName),
     'EventPluginHub: More than one plugin attempted to publish the same ' +
     'event name, `%s`.',
@@ -10069,7 +10304,7 @@ function publishEventForPlugin(dispatchConfig, PluginModule, eventName) {
  * @private
  */
 function publishRegistrationName(registrationName, PluginModule, eventName) {
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     !EventPluginRegistry.registrationNameModules[registrationName],
     'EventPluginHub: More than one plugin attempted to publish the same ' +
     'registration name, `%s`.',
@@ -10117,7 +10352,7 @@ var EventPluginRegistry = {
    * @see {EventPluginHub.injection.injectEventPluginOrder}
    */
   injectEventPluginOrder: function(InjectedEventPluginOrder) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       !EventPluginOrder,
       'EventPluginRegistry: Cannot inject event plugin ordering more than ' +
       'once. You are likely trying to load more than one copy of React.'
@@ -10146,7 +10381,7 @@ var EventPluginRegistry = {
       var PluginModule = injectedNamesToPlugins[pluginName];
       if (!namesToPlugins.hasOwnProperty(pluginName) ||
           namesToPlugins[pluginName] !== PluginModule) {
-        ("production" !== "production" ? invariant(
+        ("production" !== process.env.NODE_ENV ? invariant(
           !namesToPlugins[pluginName],
           'EventPluginRegistry: Cannot inject two different event plugins ' +
           'using the same name, `%s`.',
@@ -10221,7 +10456,9 @@ var EventPluginRegistry = {
 
 module.exports = EventPluginRegistry;
 
-},{"./invariant":147}],30:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./invariant":148,"_process":12}],31:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -10251,8 +10488,8 @@ var injection = {
   Mount: null,
   injectMount: function(InjectedMount) {
     injection.Mount = InjectedMount;
-    if ("production" !== "production") {
-      ("production" !== "production" ? invariant(
+    if ("production" !== process.env.NODE_ENV) {
+      ("production" !== process.env.NODE_ENV ? invariant(
         InjectedMount && InjectedMount.getNode,
         'EventPluginUtils.injection.injectMount(...): Injected Mount module ' +
         'is missing getNode.'
@@ -10280,7 +10517,7 @@ function isStartish(topLevelType) {
 
 
 var validateEventDispatches;
-if ("production" !== "production") {
+if ("production" !== process.env.NODE_ENV) {
   validateEventDispatches = function(event) {
     var dispatchListeners = event._dispatchListeners;
     var dispatchIDs = event._dispatchIDs;
@@ -10292,7 +10529,7 @@ if ("production" !== "production") {
       dispatchListeners.length :
       dispatchListeners ? 1 : 0;
 
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       idsIsArr === listenersIsArr && IDsLen === listenersLen,
       'EventPluginUtils: Invalid `event`.'
     ) : invariant(idsIsArr === listenersIsArr && IDsLen === listenersLen));
@@ -10307,7 +10544,7 @@ if ("production" !== "production") {
 function forEachEventDispatch(event, cb) {
   var dispatchListeners = event._dispatchListeners;
   var dispatchIDs = event._dispatchIDs;
-  if ("production" !== "production") {
+  if ("production" !== process.env.NODE_ENV) {
     validateEventDispatches(event);
   }
   if (Array.isArray(dispatchListeners)) {
@@ -10355,7 +10592,7 @@ function executeDispatchesInOrder(event, cb) {
 function executeDispatchesInOrderStopAtTrueImpl(event) {
   var dispatchListeners = event._dispatchListeners;
   var dispatchIDs = event._dispatchIDs;
-  if ("production" !== "production") {
+  if ("production" !== process.env.NODE_ENV) {
     validateEventDispatches(event);
   }
   if (Array.isArray(dispatchListeners)) {
@@ -10396,12 +10633,12 @@ function executeDispatchesInOrderStopAtTrue(event) {
  * @return The return value of executing the single dispatch.
  */
 function executeDirectDispatch(event) {
-  if ("production" !== "production") {
+  if ("production" !== process.env.NODE_ENV) {
     validateEventDispatches(event);
   }
   var dispatchListener = event._dispatchListeners;
   var dispatchID = event._dispatchIDs;
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     !Array.isArray(dispatchListener),
     'executeDirectDispatch(...): Invalid `event`.'
   ) : invariant(!Array.isArray(dispatchListener)));
@@ -10440,7 +10677,9 @@ var EventPluginUtils = {
 
 module.exports = EventPluginUtils;
 
-},{"./EventConstants":26,"./invariant":147}],31:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./EventConstants":27,"./invariant":148,"_process":12}],32:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -10480,7 +10719,7 @@ function listenerAtPhase(id, event, propagationPhase) {
  * "dispatch" object that pairs the event with the listener.
  */
 function accumulateDirectionalDispatches(domID, upwards, event) {
-  if ("production" !== "production") {
+  if ("production" !== process.env.NODE_ENV) {
     if (!domID) {
       throw new Error('Dispatching id must not be null');
     }
@@ -10580,7 +10819,8 @@ var EventPropagators = {
 
 module.exports = EventPropagators;
 
-},{"./EventConstants":26,"./EventPluginHub":28,"./accumulateInto":117,"./forEachAccumulated":132}],32:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./EventConstants":27,"./EventPluginHub":29,"./accumulateInto":118,"./forEachAccumulated":133,"_process":12}],33:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -10624,7 +10864,7 @@ var ExecutionEnvironment = {
 
 module.exports = ExecutionEnvironment;
 
-},{}],33:[function(require,module,exports){
+},{}],34:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -10715,7 +10955,7 @@ PooledClass.addPoolingTo(FallbackCompositionState);
 
 module.exports = FallbackCompositionState;
 
-},{"./Object.assign":38,"./PooledClass":39,"./getTextContentAccessor":142}],34:[function(require,module,exports){
+},{"./Object.assign":39,"./PooledClass":40,"./getTextContentAccessor":143}],35:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -10815,6 +11055,7 @@ var HTMLDOMPropertyConfig = {
     headers: null,
     height: MUST_USE_ATTRIBUTE,
     hidden: MUST_USE_ATTRIBUTE | HAS_BOOLEAN_VALUE,
+    high: null,
     href: null,
     hrefLang: null,
     htmlFor: null,
@@ -10825,6 +11066,7 @@ var HTMLDOMPropertyConfig = {
     lang: null,
     list: MUST_USE_ATTRIBUTE,
     loop: MUST_USE_PROPERTY | HAS_BOOLEAN_VALUE,
+    low: null,
     manifest: MUST_USE_ATTRIBUTE,
     marginHeight: null,
     marginWidth: null,
@@ -10839,6 +11081,7 @@ var HTMLDOMPropertyConfig = {
     name: null,
     noValidate: HAS_BOOLEAN_VALUE,
     open: HAS_BOOLEAN_VALUE,
+    optimum: null,
     pattern: null,
     placeholder: null,
     poster: null,
@@ -10852,6 +11095,7 @@ var HTMLDOMPropertyConfig = {
     rowSpan: null,
     sandbox: null,
     scope: null,
+    scoped: HAS_BOOLEAN_VALUE,
     scrolling: null,
     seamless: MUST_USE_ATTRIBUTE | HAS_BOOLEAN_VALUE,
     selected: MUST_USE_PROPERTY | HAS_BOOLEAN_VALUE,
@@ -10893,7 +11137,9 @@ var HTMLDOMPropertyConfig = {
     itemID: MUST_USE_ATTRIBUTE,
     itemRef: MUST_USE_ATTRIBUTE,
     // property is supported for OpenGraph in meta tags.
-    property: null
+    property: null,
+    // IE-only attribute that controls focus behavior
+    unselectable: MUST_USE_ATTRIBUTE
   },
   DOMAttributeNames: {
     acceptCharset: 'accept-charset',
@@ -10920,7 +11166,8 @@ var HTMLDOMPropertyConfig = {
 
 module.exports = HTMLDOMPropertyConfig;
 
-},{"./DOMProperty":21,"./ExecutionEnvironment":32}],35:[function(require,module,exports){
+},{"./DOMProperty":22,"./ExecutionEnvironment":33}],36:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -10950,7 +11197,7 @@ var hasReadOnlyValue = {
 };
 
 function _assertSingleLink(input) {
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     input.props.checkedLink == null || input.props.valueLink == null,
     'Cannot provide a checkedLink and a valueLink. If you want to use ' +
     'checkedLink, you probably don\'t want to use valueLink and vice versa.'
@@ -10958,7 +11205,7 @@ function _assertSingleLink(input) {
 }
 function _assertValueLink(input) {
   _assertSingleLink(input);
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     input.props.value == null && input.props.onChange == null,
     'Cannot provide a valueLink and a value or onChange event. If you want ' +
     'to use value or onChange, you probably don\'t want to use valueLink.'
@@ -10967,7 +11214,7 @@ function _assertValueLink(input) {
 
 function _assertCheckedLink(input) {
   _assertSingleLink(input);
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     input.props.checked == null && input.props.onChange == null,
     'Cannot provide a checkedLink and a checked property or onChange event. ' +
     'If you want to use checked or onChange, you probably don\'t want to ' +
@@ -11074,7 +11321,9 @@ var LinkedValueUtils = {
 
 module.exports = LinkedValueUtils;
 
-},{"./ReactPropTypes":90,"./invariant":147}],36:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ReactPropTypes":91,"./invariant":148,"_process":12}],37:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -11100,11 +11349,11 @@ function remove(event) {
 
 var LocalEventTrapMixin = {
   trapBubbledEvent:function(topLevelType, handlerBaseName) {
-    ("production" !== "production" ? invariant(this.isMounted(), 'Must be mounted to trap events') : invariant(this.isMounted()));
+    ("production" !== process.env.NODE_ENV ? invariant(this.isMounted(), 'Must be mounted to trap events') : invariant(this.isMounted()));
     // If a component renders to null or if another component fatals and causes
     // the state of the tree to be corrupted, `node` here can be null.
     var node = this.getDOMNode();
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       node,
       'LocalEventTrapMixin.trapBubbledEvent(...): Requires node to be rendered.'
     ) : invariant(node));
@@ -11129,7 +11378,8 @@ var LocalEventTrapMixin = {
 
 module.exports = LocalEventTrapMixin;
 
-},{"./ReactBrowserEventEmitter":42,"./accumulateInto":117,"./forEachAccumulated":132,"./invariant":147}],37:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ReactBrowserEventEmitter":43,"./accumulateInto":118,"./forEachAccumulated":133,"./invariant":148,"_process":12}],38:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -11187,7 +11437,7 @@ var MobileSafariClickEventPlugin = {
 
 module.exports = MobileSafariClickEventPlugin;
 
-},{"./EventConstants":26,"./emptyFunction":126}],38:[function(require,module,exports){
+},{"./EventConstants":27,"./emptyFunction":127}],39:[function(require,module,exports){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -11236,7 +11486,8 @@ function assign(target, sources) {
 
 module.exports = assign;
 
-},{}],39:[function(require,module,exports){
+},{}],40:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -11305,7 +11556,7 @@ var fiveArgumentPooler = function(a1, a2, a3, a4, a5) {
 
 var standardReleaser = function(instance) {
   var Klass = this;
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     instance instanceof Klass,
     'Trying to release an instance into a pool of a different type.'
   ) : invariant(instance instanceof Klass));
@@ -11350,7 +11601,9 @@ var PooledClass = {
 
 module.exports = PooledClass;
 
-},{"./invariant":147}],40:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./invariant":148,"_process":12}],41:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -11394,7 +11647,7 @@ var createElement = ReactElement.createElement;
 var createFactory = ReactElement.createFactory;
 var cloneElement = ReactElement.cloneElement;
 
-if ("production" !== "production") {
+if ("production" !== process.env.NODE_ENV) {
   createElement = ReactElementValidator.createElement;
   createFactory = ReactElementValidator.createFactory;
   cloneElement = ReactElementValidator.cloneElement;
@@ -11451,7 +11704,7 @@ if (
   });
 }
 
-if ("production" !== "production") {
+if ("production" !== process.env.NODE_ENV) {
   var ExecutionEnvironment = require("./ExecutionEnvironment");
   if (ExecutionEnvironment.canUseDOM && window.top === window.self) {
 
@@ -11461,7 +11714,7 @@ if ("production" !== "production") {
       if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === 'undefined') {
         console.debug(
           'Download the React DevTools for a better development experience: ' +
-          'http://fb.me/react-devtools'
+          'https://fb.me/react-devtools'
         );
       }
     }
@@ -11488,7 +11741,7 @@ if ("production" !== "production") {
       if (!expectedFeatures[i]) {
         console.error(
           'One or more ES5 shim/shams expected by React are not available: ' +
-          'http://fb.me/react-warning-polyfills'
+          'https://fb.me/react-warning-polyfills'
         );
         break;
       }
@@ -11496,11 +11749,12 @@ if ("production" !== "production") {
   }
 }
 
-React.version = '0.13.1';
+React.version = '0.13.3';
 
 module.exports = React;
 
-},{"./EventPluginUtils":30,"./ExecutionEnvironment":32,"./Object.assign":38,"./ReactChildren":44,"./ReactClass":45,"./ReactComponent":46,"./ReactContext":50,"./ReactCurrentOwner":51,"./ReactDOM":52,"./ReactDOMTextComponent":63,"./ReactDefaultInjection":66,"./ReactElement":69,"./ReactElementValidator":70,"./ReactInstanceHandles":78,"./ReactMount":82,"./ReactPerf":87,"./ReactPropTypes":90,"./ReactReconciler":93,"./ReactServerRendering":96,"./findDOMNode":129,"./onlyChild":156}],41:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./EventPluginUtils":31,"./ExecutionEnvironment":33,"./Object.assign":39,"./ReactChildren":45,"./ReactClass":46,"./ReactComponent":47,"./ReactContext":51,"./ReactCurrentOwner":52,"./ReactDOM":53,"./ReactDOMTextComponent":64,"./ReactDefaultInjection":67,"./ReactElement":70,"./ReactElementValidator":71,"./ReactInstanceHandles":79,"./ReactMount":83,"./ReactPerf":88,"./ReactPropTypes":91,"./ReactReconciler":94,"./ReactServerRendering":97,"./findDOMNode":130,"./onlyChild":157,"_process":12}],42:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -11531,7 +11785,7 @@ var ReactBrowserComponentMixin = {
 
 module.exports = ReactBrowserComponentMixin;
 
-},{"./findDOMNode":129}],42:[function(require,module,exports){
+},{"./findDOMNode":130}],43:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -11884,7 +12138,7 @@ var ReactBrowserEventEmitter = assign({}, ReactEventEmitterMixin, {
 
 module.exports = ReactBrowserEventEmitter;
 
-},{"./EventConstants":26,"./EventPluginHub":28,"./EventPluginRegistry":29,"./Object.assign":38,"./ReactEventEmitterMixin":73,"./ViewportMetrics":116,"./isEventSupported":148}],43:[function(require,module,exports){
+},{"./EventConstants":27,"./EventPluginHub":29,"./EventPluginRegistry":30,"./Object.assign":39,"./ReactEventEmitterMixin":74,"./ViewportMetrics":117,"./isEventSupported":149}],44:[function(require,module,exports){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -12011,7 +12265,8 @@ var ReactChildReconciler = {
 
 module.exports = ReactChildReconciler;
 
-},{"./ReactReconciler":93,"./flattenChildren":130,"./instantiateReactComponent":146,"./shouldUpdateReactComponent":163}],44:[function(require,module,exports){
+},{"./ReactReconciler":94,"./flattenChildren":131,"./instantiateReactComponent":147,"./shouldUpdateReactComponent":164}],45:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -12096,8 +12351,8 @@ function mapSingleChildIntoContext(traverseContext, child, name, i) {
   var mapResult = mapBookKeeping.mapResult;
 
   var keyUnique = !mapResult.hasOwnProperty(name);
-  if ("production" !== "production") {
-    ("production" !== "production" ? warning(
+  if ("production" !== process.env.NODE_ENV) {
+    ("production" !== process.env.NODE_ENV ? warning(
       keyUnique,
       'ReactChildren.map(...): Encountered two children with the same key, ' +
       '`%s`. Child keys must be unique; when two children share a key, only ' +
@@ -12162,7 +12417,9 @@ var ReactChildren = {
 
 module.exports = ReactChildren;
 
-},{"./PooledClass":39,"./ReactFragment":75,"./traverseAllChildren":165,"./warning":166}],45:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./PooledClass":40,"./ReactFragment":76,"./traverseAllChildren":166,"./warning":167,"_process":12}],46:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -12492,7 +12749,7 @@ var RESERVED_SPEC_KEYS = {
     }
   },
   childContextTypes: function(Constructor, childContextTypes) {
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       validateTypeDef(
         Constructor,
         childContextTypes,
@@ -12506,7 +12763,7 @@ var RESERVED_SPEC_KEYS = {
     );
   },
   contextTypes: function(Constructor, contextTypes) {
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       validateTypeDef(
         Constructor,
         contextTypes,
@@ -12534,7 +12791,7 @@ var RESERVED_SPEC_KEYS = {
     }
   },
   propTypes: function(Constructor, propTypes) {
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       validateTypeDef(
         Constructor,
         propTypes,
@@ -12557,7 +12814,7 @@ function validateTypeDef(Constructor, typeDef, location) {
     if (typeDef.hasOwnProperty(propName)) {
       // use a warning instead of an invariant so components
       // don't show up in prod but not in __DEV__
-      ("production" !== "production" ? warning(
+      ("production" !== process.env.NODE_ENV ? warning(
         typeof typeDef[propName] === 'function',
         '%s: %s type `%s` is invalid; it must be a function, usually from ' +
         'React.PropTypes.',
@@ -12576,7 +12833,7 @@ function validateMethodOverride(proto, name) {
 
   // Disallow overriding of base class methods unless explicitly allowed.
   if (ReactClassMixin.hasOwnProperty(name)) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       specPolicy === SpecPolicy.OVERRIDE_BASE,
       'ReactClassInterface: You are attempting to override ' +
       '`%s` from your class specification. Ensure that your method names ' +
@@ -12587,7 +12844,7 @@ function validateMethodOverride(proto, name) {
 
   // Disallow defining methods more than once unless explicitly allowed.
   if (proto.hasOwnProperty(name)) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       specPolicy === SpecPolicy.DEFINE_MANY ||
       specPolicy === SpecPolicy.DEFINE_MANY_MERGED,
       'ReactClassInterface: You are attempting to define ' +
@@ -12608,12 +12865,12 @@ function mixSpecIntoComponent(Constructor, spec) {
     return;
   }
 
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     typeof spec !== 'function',
     'ReactClass: You\'re attempting to ' +
     'use a component class as a mixin. Instead, just use a regular object.'
   ) : invariant(typeof spec !== 'function'));
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     !ReactElement.isValidElement(spec),
     'ReactClass: You\'re attempting to ' +
     'use a component as a mixin. Instead, just use a regular object.'
@@ -12670,7 +12927,7 @@ function mixSpecIntoComponent(Constructor, spec) {
           var specPolicy = ReactClassInterface[name];
 
           // These cases should already be caught by validateMethodOverride
-          ("production" !== "production" ? invariant(
+          ("production" !== process.env.NODE_ENV ? invariant(
             isReactClassMethod && (
               (specPolicy === SpecPolicy.DEFINE_MANY_MERGED || specPolicy === SpecPolicy.DEFINE_MANY)
             ),
@@ -12691,7 +12948,7 @@ function mixSpecIntoComponent(Constructor, spec) {
           }
         } else {
           proto[name] = property;
-          if ("production" !== "production") {
+          if ("production" !== process.env.NODE_ENV) {
             // Add verbose displayName to the function, which helps when looking
             // at profiling tools.
             if (typeof property === 'function' && spec.displayName) {
@@ -12715,7 +12972,7 @@ function mixStaticSpecIntoComponent(Constructor, statics) {
     }
 
     var isReserved = name in RESERVED_SPEC_KEYS;
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       !isReserved,
       'ReactClass: You are attempting to define a reserved ' +
       'property, `%s`, that shouldn\'t be on the "statics" key. Define it ' +
@@ -12725,7 +12982,7 @@ function mixStaticSpecIntoComponent(Constructor, statics) {
     ) : invariant(!isReserved));
 
     var isInherited = name in Constructor;
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       !isInherited,
       'ReactClass: You are attempting to define ' +
       '`%s` on your component more than once. This conflict may be ' +
@@ -12744,14 +13001,14 @@ function mixStaticSpecIntoComponent(Constructor, statics) {
  * @return {object} one after it has been mutated to contain everything in two.
  */
 function mergeIntoWithNoDuplicateKeys(one, two) {
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     one && two && typeof one === 'object' && typeof two === 'object',
     'mergeIntoWithNoDuplicateKeys(): Cannot merge non-objects.'
   ) : invariant(one && two && typeof one === 'object' && typeof two === 'object'));
 
   for (var key in two) {
     if (two.hasOwnProperty(key)) {
-      ("production" !== "production" ? invariant(
+      ("production" !== process.env.NODE_ENV ? invariant(
         one[key] === undefined,
         'mergeIntoWithNoDuplicateKeys(): ' +
         'Tried to merge two objects with the same key: `%s`. This conflict ' +
@@ -12814,7 +13071,7 @@ function createChainedFunction(one, two) {
  */
 function bindAutoBindMethod(component, method) {
   var boundMethod = method.bind(component);
-  if ("production" !== "production") {
+  if ("production" !== process.env.NODE_ENV) {
     boundMethod.__reactBoundContext = component;
     boundMethod.__reactBoundMethod = method;
     boundMethod.__reactBoundArguments = null;
@@ -12826,14 +13083,14 @@ function bindAutoBindMethod(component, method) {
       // ignore the value of "this" that the user is trying to use, so
       // let's warn.
       if (newThis !== component && newThis !== null) {
-        ("production" !== "production" ? warning(
+        ("production" !== process.env.NODE_ENV ? warning(
           false,
           'bind(): React component methods may only be bound to the ' +
           'component instance. See %s',
           componentName
         ) : null);
       } else if (!args.length) {
-        ("production" !== "production" ? warning(
+        ("production" !== process.env.NODE_ENV ? warning(
           false,
           'bind(): You are binding a component method to the component. ' +
           'React does this for you automatically in a high-performance ' +
@@ -12877,7 +13134,7 @@ var typeDeprecationDescriptor = {
   enumerable: false,
   get: function() {
     var displayName = this.displayName || this.name || 'Component';
-    ("production" !== "production" ? warning(
+    ("production" !== process.env.NODE_ENV ? warning(
       false,
       '%s.type is deprecated. Use %s directly to access the class.',
       displayName,
@@ -12914,10 +13171,10 @@ var ReactClassMixin = {
    * @final
    */
   isMounted: function() {
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       var owner = ReactCurrentOwner.current;
       if (owner !== null) {
-        ("production" !== "production" ? warning(
+        ("production" !== process.env.NODE_ENV ? warning(
           owner._warnedAboutRefsInRender,
           '%s is accessing isMounted inside its render() function. ' +
           'render() should be a pure function of props and state. It should ' +
@@ -12995,11 +13252,11 @@ var ReactClass = {
       // This constructor is overridden by mocks. The argument is used
       // by mocks to assert on what gets mounted.
 
-      if ("production" !== "production") {
-        ("production" !== "production" ? warning(
+      if ("production" !== process.env.NODE_ENV) {
+        ("production" !== process.env.NODE_ENV ? warning(
           this instanceof Constructor,
           'Something is calling a React component directly. Use a factory or ' +
-          'JSX instead. See: http://fb.me/react-legacyfactory'
+          'JSX instead. See: https://fb.me/react-legacyfactory'
         ) : null);
       }
 
@@ -13016,7 +13273,7 @@ var ReactClass = {
       // getInitialState and componentWillMount methods for initialization.
 
       var initialState = this.getInitialState ? this.getInitialState() : null;
-      if ("production" !== "production") {
+      if ("production" !== process.env.NODE_ENV) {
         // We allow auto-mocks to proceed as if they're returning null.
         if (typeof initialState === 'undefined' &&
             this.getInitialState._isMockFunction) {
@@ -13025,7 +13282,7 @@ var ReactClass = {
           initialState = null;
         }
       }
-      ("production" !== "production" ? invariant(
+      ("production" !== process.env.NODE_ENV ? invariant(
         typeof initialState === 'object' && !Array.isArray(initialState),
         '%s.getInitialState(): must return an object or null',
         Constructor.displayName || 'ReactCompositeComponent'
@@ -13047,7 +13304,7 @@ var ReactClass = {
       Constructor.defaultProps = Constructor.getDefaultProps();
     }
 
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       // This is a tag to indicate that the use of these method names is ok,
       // since it's used with createClass. If it's not, then it's likely a
       // mistake so we'll warn you to use the static property, property
@@ -13060,13 +13317,13 @@ var ReactClass = {
       }
     }
 
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       Constructor.prototype.render,
       'createClass(...): Class specification must implement a `render` method.'
     ) : invariant(Constructor.prototype.render));
 
-    if ("production" !== "production") {
-      ("production" !== "production" ? warning(
+    if ("production" !== process.env.NODE_ENV) {
+      ("production" !== process.env.NODE_ENV ? warning(
         !Constructor.prototype.componentShouldUpdate,
         '%s has a method called ' +
         'componentShouldUpdate(). Did you mean shouldComponentUpdate()? ' +
@@ -13085,7 +13342,7 @@ var ReactClass = {
 
     // Legacy hook
     Constructor.type = Constructor;
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       try {
         Object.defineProperty(Constructor, 'type', typeDeprecationDescriptor);
       } catch (x) {
@@ -13106,7 +13363,9 @@ var ReactClass = {
 
 module.exports = ReactClass;
 
-},{"./Object.assign":38,"./ReactComponent":46,"./ReactCurrentOwner":51,"./ReactElement":69,"./ReactErrorUtils":72,"./ReactInstanceMap":79,"./ReactLifeCycle":80,"./ReactPropTypeLocationNames":88,"./ReactPropTypeLocations":89,"./ReactUpdateQueue":98,"./invariant":147,"./keyMirror":152,"./keyOf":153,"./warning":166}],46:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./Object.assign":39,"./ReactComponent":47,"./ReactCurrentOwner":52,"./ReactElement":70,"./ReactErrorUtils":73,"./ReactInstanceMap":80,"./ReactLifeCycle":81,"./ReactPropTypeLocationNames":89,"./ReactPropTypeLocations":90,"./ReactUpdateQueue":99,"./invariant":148,"./keyMirror":153,"./keyOf":154,"./warning":167,"_process":12}],47:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -13159,7 +13418,7 @@ function ReactComponent(props, context) {
  * @protected
  */
 ReactComponent.prototype.setState = function(partialState, callback) {
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     typeof partialState === 'object' ||
     typeof partialState === 'function' ||
     partialState == null,
@@ -13168,8 +13427,8 @@ ReactComponent.prototype.setState = function(partialState, callback) {
   ) : invariant(typeof partialState === 'object' ||
   typeof partialState === 'function' ||
   partialState == null));
-  if ("production" !== "production") {
-    ("production" !== "production" ? warning(
+  if ("production" !== process.env.NODE_ENV) {
+    ("production" !== process.env.NODE_ENV ? warning(
       partialState != null,
       'setState(...): You passed an undefined or null state object; ' +
       'instead, use forceUpdate().'
@@ -13207,22 +13466,40 @@ ReactComponent.prototype.forceUpdate = function(callback) {
  * we would like to deprecate them, we're not going to move them over to this
  * modern base class. Instead, we define a getter that warns if it's accessed.
  */
-if ("production" !== "production") {
+if ("production" !== process.env.NODE_ENV) {
   var deprecatedAPIs = {
-    getDOMNode: 'getDOMNode',
-    isMounted: 'isMounted',
-    replaceProps: 'replaceProps',
-    replaceState: 'replaceState',
-    setProps: 'setProps'
+    getDOMNode: [
+      'getDOMNode',
+      'Use React.findDOMNode(component) instead.'
+    ],
+    isMounted: [
+      'isMounted',
+      'Instead, make sure to clean up subscriptions and pending requests in ' +
+      'componentWillUnmount to prevent memory leaks.'
+    ],
+    replaceProps: [
+      'replaceProps',
+      'Instead, call React.render again at the top level.'
+    ],
+    replaceState: [
+      'replaceState',
+      'Refactor your code to use setState instead (see ' +
+      'https://github.com/facebook/react/issues/3236).'
+    ],
+    setProps: [
+      'setProps',
+      'Instead, call React.render again at the top level.'
+    ]
   };
-  var defineDeprecationWarning = function(methodName, displayName) {
+  var defineDeprecationWarning = function(methodName, info) {
     try {
       Object.defineProperty(ReactComponent.prototype, methodName, {
         get: function() {
-          ("production" !== "production" ? warning(
+          ("production" !== process.env.NODE_ENV ? warning(
             false,
-            '%s(...) is deprecated in plain JavaScript React classes.',
-            displayName
+            '%s(...) is deprecated in plain JavaScript React classes. %s',
+            info[0],
+            info[1]
           ) : null);
           return undefined;
         }
@@ -13240,7 +13517,8 @@ if ("production" !== "production") {
 
 module.exports = ReactComponent;
 
-},{"./ReactUpdateQueue":98,"./invariant":147,"./warning":166}],47:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ReactUpdateQueue":99,"./invariant":148,"./warning":167,"_process":12}],48:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -13287,7 +13565,8 @@ var ReactComponentBrowserEnvironment = {
 
 module.exports = ReactComponentBrowserEnvironment;
 
-},{"./ReactDOMIDOperations":56,"./ReactMount":82}],48:[function(require,module,exports){
+},{"./ReactDOMIDOperations":57,"./ReactMount":83}],49:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -13328,7 +13607,7 @@ var ReactComponentEnvironment = {
 
   injection: {
     injectEnvironment: function(environment) {
-      ("production" !== "production" ? invariant(
+      ("production" !== process.env.NODE_ENV ? invariant(
         !injected,
         'ReactCompositeComponent: injectEnvironment() can only be called once.'
       ) : invariant(!injected));
@@ -13346,7 +13625,9 @@ var ReactComponentEnvironment = {
 
 module.exports = ReactComponentEnvironment;
 
-},{"./invariant":147}],49:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./invariant":148,"_process":12}],50:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -13483,10 +13764,10 @@ var ReactCompositeComponentMixin = {
     // Initialize the public class
     var inst = new Component(publicProps, publicContext);
 
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       // This will throw later in _renderValidatedComponent, but add an early
       // warning now to help debugging
-      ("production" !== "production" ? warning(
+      ("production" !== process.env.NODE_ENV ? warning(
         inst.render != null,
         '%s(...): No `render` method found on the returned component ' +
         'instance: you may have forgotten to define `render` in your ' +
@@ -13507,15 +13788,15 @@ var ReactCompositeComponentMixin = {
     // Store a reference from the instance back to the internal representation
     ReactInstanceMap.set(inst, this);
 
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       this._warnIfContextsDiffer(this._currentElement._context, context);
     }
 
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       // Since plain JS classes are defined without any special initialization
       // logic, we can not catch common errors early. Therefore, we have to
       // catch them here, at initialization time, instead.
-      ("production" !== "production" ? warning(
+      ("production" !== process.env.NODE_ENV ? warning(
         !inst.getInitialState ||
         inst.getInitialState.isReactClassApproved,
         'getInitialState was defined on %s, a plain JavaScript class. ' +
@@ -13523,19 +13804,27 @@ var ReactCompositeComponentMixin = {
         'Did you mean to define a state property instead?',
         this.getName() || 'a component'
       ) : null);
-      ("production" !== "production" ? warning(
+      ("production" !== process.env.NODE_ENV ? warning(
+        !inst.getDefaultProps ||
+        inst.getDefaultProps.isReactClassApproved,
+        'getDefaultProps was defined on %s, a plain JavaScript class. ' +
+        'This is only supported for classes created using React.createClass. ' +
+        'Use a static property to define defaultProps instead.',
+        this.getName() || 'a component'
+      ) : null);
+      ("production" !== process.env.NODE_ENV ? warning(
         !inst.propTypes,
         'propTypes was defined as an instance property on %s. Use a static ' +
         'property to define propTypes instead.',
         this.getName() || 'a component'
       ) : null);
-      ("production" !== "production" ? warning(
+      ("production" !== process.env.NODE_ENV ? warning(
         !inst.contextTypes,
         'contextTypes was defined as an instance property on %s. Use a ' +
         'static property to define contextTypes instead.',
         this.getName() || 'a component'
       ) : null);
-      ("production" !== "production" ? warning(
+      ("production" !== process.env.NODE_ENV ? warning(
         typeof inst.componentShouldUpdate !== 'function',
         '%s has a method called ' +
         'componentShouldUpdate(). Did you mean shouldComponentUpdate()? ' +
@@ -13549,7 +13838,7 @@ var ReactCompositeComponentMixin = {
     if (initialState === undefined) {
       inst.state = initialState = null;
     }
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       typeof initialState === 'object' && !Array.isArray(initialState),
       '%s.state: must be set to an object or null',
       this.getName() || 'ReactCompositeComponent'
@@ -13559,6 +13848,7 @@ var ReactCompositeComponentMixin = {
     this._pendingReplaceState = false;
     this._pendingForceUpdate = false;
 
+    var childContext;
     var renderedElement;
 
     var previouslyMounting = ReactLifeCycle.currentlyMountingInstance;
@@ -13573,7 +13863,8 @@ var ReactCompositeComponentMixin = {
         }
       }
 
-      renderedElement = this._renderValidatedComponent();
+      childContext = this._getValidatedChildContext(context);
+      renderedElement = this._renderValidatedComponent(childContext);
     } finally {
       ReactLifeCycle.currentlyMountingInstance = previouslyMounting;
     }
@@ -13587,7 +13878,7 @@ var ReactCompositeComponentMixin = {
       this._renderedComponent,
       rootID,
       transaction,
-      this._processChildContext(context)
+      this._mergeChildContext(context, childContext)
     );
     if (inst.componentDidMount) {
       transaction.getReactMountReady().enqueue(inst.componentDidMount, inst);
@@ -13697,7 +13988,7 @@ var ReactCompositeComponentMixin = {
    */
   _processContext: function(context) {
     var maskedContext = this._maskContext(context);
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       var Component = ReactNativeComponent.getComponentClassForElement(
         this._currentElement
       );
@@ -13717,17 +14008,17 @@ var ReactCompositeComponentMixin = {
    * @return {object}
    * @private
    */
-  _processChildContext: function(currentContext) {
+  _getValidatedChildContext: function(currentContext) {
     var inst = this._instance;
     var childContext = inst.getChildContext && inst.getChildContext();
     if (childContext) {
-      ("production" !== "production" ? invariant(
+      ("production" !== process.env.NODE_ENV ? invariant(
         typeof inst.constructor.childContextTypes === 'object',
         '%s.getChildContext(): childContextTypes must be defined in order to ' +
         'use getChildContext().',
         this.getName() || 'ReactCompositeComponent'
       ) : invariant(typeof inst.constructor.childContextTypes === 'object'));
-      if ("production" !== "production") {
+      if ("production" !== process.env.NODE_ENV) {
         this._checkPropTypes(
           inst.constructor.childContextTypes,
           childContext,
@@ -13735,13 +14026,20 @@ var ReactCompositeComponentMixin = {
         );
       }
       for (var name in childContext) {
-        ("production" !== "production" ? invariant(
+        ("production" !== process.env.NODE_ENV ? invariant(
           name in inst.constructor.childContextTypes,
           '%s.getChildContext(): key "%s" is not defined in childContextTypes.',
           this.getName() || 'ReactCompositeComponent',
           name
         ) : invariant(name in inst.constructor.childContextTypes));
       }
+      return childContext;
+    }
+    return null;
+  },
+
+  _mergeChildContext: function(currentContext, childContext) {
+    if (childContext) {
       return assign({}, currentContext, childContext);
     }
     return currentContext;
@@ -13757,7 +14055,7 @@ var ReactCompositeComponentMixin = {
    * @private
    */
   _processProps: function(newProps) {
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       var Component = ReactNativeComponent.getComponentClassForElement(
         this._currentElement
       );
@@ -13790,7 +14088,7 @@ var ReactCompositeComponentMixin = {
         try {
           // This is intentionally an invariant that gets caught. It's the same
           // behavior as without this statement except with a better message.
-          ("production" !== "production" ? invariant(
+          ("production" !== process.env.NODE_ENV ? invariant(
             typeof propTypes[propName] === 'function',
             '%s: %s type `%s` is invalid; it must be a function, usually ' +
             'from React.PropTypes.',
@@ -13810,14 +14108,14 @@ var ReactCompositeComponentMixin = {
 
           if (location === ReactPropTypeLocations.prop) {
             // Preface gives us something to blacklist in warning module
-            ("production" !== "production" ? warning(
+            ("production" !== process.env.NODE_ENV ? warning(
               false,
               'Failed Composite propType: %s%s',
               error.message,
               addendum
             ) : null);
           } else {
-            ("production" !== "production" ? warning(
+            ("production" !== process.env.NODE_ENV ? warning(
               false,
               'Failed Context Types: %s%s',
               error.message,
@@ -13862,7 +14160,7 @@ var ReactCompositeComponentMixin = {
     }
 
     if (this._pendingStateQueue !== null || this._pendingForceUpdate) {
-      if ("production" !== "production") {
+      if ("production" !== process.env.NODE_ENV) {
         ReactElementValidator.checkAndWarnForMutatedProps(
           this._currentElement
         );
@@ -13889,7 +14187,7 @@ var ReactCompositeComponentMixin = {
     var displayName = this.getName() || 'ReactCompositeComponent';
     for (var i = 0; i < parentKeys.length; i++) {
       var key = parentKeys[i];
-      ("production" !== "production" ? warning(
+      ("production" !== process.env.NODE_ENV ? warning(
         ownerBasedContext[key] === parentBasedContext[key],
         'owner-based and parent-based contexts differ '  +
         '(values: `%s` vs `%s`) for key (%s) while mounting %s ' +
@@ -13934,7 +14232,7 @@ var ReactCompositeComponentMixin = {
       nextContext = this._processContext(nextParentElement._context);
       nextProps = this._processProps(nextParentElement.props);
 
-      if ("production" !== "production") {
+      if ("production" !== process.env.NODE_ENV) {
         if (nextUnmaskedContext != null) {
           this._warnIfContextsDiffer(
             nextParentElement._context,
@@ -13959,8 +14257,8 @@ var ReactCompositeComponentMixin = {
       !inst.shouldComponentUpdate ||
       inst.shouldComponentUpdate(nextProps, nextState, nextContext);
 
-    if ("production" !== "production") {
-      ("production" !== "production" ? warning(
+    if ("production" !== process.env.NODE_ENV) {
+      ("production" !== process.env.NODE_ENV ? warning(
         typeof shouldUpdate !== 'undefined',
         '%s.shouldComponentUpdate(): Returned undefined instead of a ' +
         'boolean value. Make sure to return true or false.',
@@ -13999,6 +14297,10 @@ var ReactCompositeComponentMixin = {
 
     if (!queue) {
       return inst.state;
+    }
+
+    if (replace && queue.length === 1) {
+      return queue[0];
     }
 
     var nextState = assign({}, replace ? queue[0] : inst.state);
@@ -14070,13 +14372,14 @@ var ReactCompositeComponentMixin = {
   _updateRenderedComponent: function(transaction, context) {
     var prevComponentInstance = this._renderedComponent;
     var prevRenderedElement = prevComponentInstance._currentElement;
-    var nextRenderedElement = this._renderValidatedComponent();
+    var childContext = this._getValidatedChildContext();
+    var nextRenderedElement = this._renderValidatedComponent(childContext);
     if (shouldUpdateReactComponent(prevRenderedElement, nextRenderedElement)) {
       ReactReconciler.receiveComponent(
         prevComponentInstance,
         nextRenderedElement,
         transaction,
-        this._processChildContext(context)
+        this._mergeChildContext(context, childContext)
       );
     } else {
       // These two IDs are actually the same! But nothing should rely on that.
@@ -14092,7 +14395,7 @@ var ReactCompositeComponentMixin = {
         this._renderedComponent,
         thisID,
         transaction,
-        context
+        this._mergeChildContext(context, childContext)
       );
       this._replaceNodeWithMarkupByID(prevComponentID, nextMarkup);
     }
@@ -14114,7 +14417,7 @@ var ReactCompositeComponentMixin = {
   _renderValidatedComponentWithoutOwnerOrContext: function() {
     var inst = this._instance;
     var renderedComponent = inst.render();
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       // We allow auto-mocks to proceed as if they're returning null.
       if (typeof renderedComponent === 'undefined' &&
           inst.render._isMockFunction) {
@@ -14130,11 +14433,12 @@ var ReactCompositeComponentMixin = {
   /**
    * @private
    */
-  _renderValidatedComponent: function() {
+  _renderValidatedComponent: function(childContext) {
     var renderedComponent;
     var previousContext = ReactContext.current;
-    ReactContext.current = this._processChildContext(
-      this._currentElement._context
+    ReactContext.current = this._mergeChildContext(
+      this._currentElement._context,
+      childContext
     );
     ReactCurrentOwner.current = this;
     try {
@@ -14144,7 +14448,7 @@ var ReactCompositeComponentMixin = {
       ReactContext.current = previousContext;
       ReactCurrentOwner.current = null;
     }
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       // TODO: An `isValidNode` function would probably be more appropriate
       renderedComponent === null || renderedComponent === false ||
       ReactElement.isValidElement(renderedComponent),
@@ -14234,7 +14538,9 @@ var ReactCompositeComponent = {
 
 module.exports = ReactCompositeComponent;
 
-},{"./Object.assign":38,"./ReactComponentEnvironment":48,"./ReactContext":50,"./ReactCurrentOwner":51,"./ReactElement":69,"./ReactElementValidator":70,"./ReactInstanceMap":79,"./ReactLifeCycle":80,"./ReactNativeComponent":85,"./ReactPerf":87,"./ReactPropTypeLocationNames":88,"./ReactPropTypeLocations":89,"./ReactReconciler":93,"./ReactUpdates":99,"./emptyObject":127,"./invariant":147,"./shouldUpdateReactComponent":163,"./warning":166}],50:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./Object.assign":39,"./ReactComponentEnvironment":49,"./ReactContext":51,"./ReactCurrentOwner":52,"./ReactElement":70,"./ReactElementValidator":71,"./ReactInstanceMap":80,"./ReactLifeCycle":81,"./ReactNativeComponent":86,"./ReactPerf":88,"./ReactPropTypeLocationNames":89,"./ReactPropTypeLocations":90,"./ReactReconciler":94,"./ReactUpdates":100,"./emptyObject":128,"./invariant":148,"./shouldUpdateReactComponent":164,"./warning":167,"_process":12}],51:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -14285,8 +14591,8 @@ var ReactContext = {
    * @return {ReactComponent|array<ReactComponent>}
    */
   withContext: function(newContext, scopedCallback) {
-    if ("production" !== "production") {
-      ("production" !== "production" ? warning(
+    if ("production" !== process.env.NODE_ENV) {
+      ("production" !== process.env.NODE_ENV ? warning(
         didWarn,
         'withContext is deprecated and will be removed in a future version. ' +
         'Use a wrapper component with getChildContext instead.'
@@ -14310,7 +14616,8 @@ var ReactContext = {
 
 module.exports = ReactContext;
 
-},{"./Object.assign":38,"./emptyObject":127,"./warning":166}],51:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./Object.assign":39,"./emptyObject":128,"./warning":167,"_process":12}],52:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -14344,7 +14651,8 @@ var ReactCurrentOwner = {
 
 module.exports = ReactCurrentOwner;
 
-},{}],52:[function(require,module,exports){
+},{}],53:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -14371,7 +14679,7 @@ var mapObject = require("./mapObject");
  * @private
  */
 function createDOMFactory(tag) {
-  if ("production" !== "production") {
+  if ("production" !== process.env.NODE_ENV) {
     return ReactElementValidator.createFactory(tag);
   }
   return ReactElement.createFactory(tag);
@@ -14499,6 +14807,7 @@ var ReactDOM = mapObject({
 
   // SVG
   circle: 'circle',
+  clipPath: 'clipPath',
   defs: 'defs',
   ellipse: 'ellipse',
   g: 'g',
@@ -14520,7 +14829,8 @@ var ReactDOM = mapObject({
 
 module.exports = ReactDOM;
 
-},{"./ReactElement":69,"./ReactElementValidator":70,"./mapObject":154}],53:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ReactElement":70,"./ReactElementValidator":71,"./mapObject":155,"_process":12}],54:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -14584,7 +14894,8 @@ var ReactDOMButton = ReactClass.createClass({
 
 module.exports = ReactDOMButton;
 
-},{"./AutoFocusMixin":13,"./ReactBrowserComponentMixin":41,"./ReactClass":45,"./ReactElement":69,"./keyMirror":152}],54:[function(require,module,exports){
+},{"./AutoFocusMixin":14,"./ReactBrowserComponentMixin":42,"./ReactClass":46,"./ReactElement":70,"./keyMirror":153}],55:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -14643,24 +14954,26 @@ function assertValidProps(props) {
   }
   // Note the use of `==` which checks for null or undefined.
   if (props.dangerouslySetInnerHTML != null) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       props.children == null,
       'Can only set one of `children` or `props.dangerouslySetInnerHTML`.'
     ) : invariant(props.children == null));
-    ("production" !== "production" ? invariant(
-      props.dangerouslySetInnerHTML.__html != null,
+    ("production" !== process.env.NODE_ENV ? invariant(
+      typeof props.dangerouslySetInnerHTML === 'object' &&
+      '__html' in props.dangerouslySetInnerHTML,
       '`props.dangerouslySetInnerHTML` must be in the form `{__html: ...}`. ' +
-      'Please visit http://fb.me/react-invariant-dangerously-set-inner-html ' +
+      'Please visit https://fb.me/react-invariant-dangerously-set-inner-html ' +
       'for more information.'
-    ) : invariant(props.dangerouslySetInnerHTML.__html != null));
+    ) : invariant(typeof props.dangerouslySetInnerHTML === 'object' &&
+    '__html' in props.dangerouslySetInnerHTML));
   }
-  if ("production" !== "production") {
-    ("production" !== "production" ? warning(
+  if ("production" !== process.env.NODE_ENV) {
+    ("production" !== process.env.NODE_ENV ? warning(
       props.innerHTML == null,
       'Directly setting property `innerHTML` is not permitted. ' +
       'For more information, lookup documentation on `dangerouslySetInnerHTML`.'
     ) : null);
-    ("production" !== "production" ? warning(
+    ("production" !== process.env.NODE_ENV ? warning(
       !props.contentEditable || props.children == null,
       'A component is `contentEditable` and contains `children` managed by ' +
       'React. It is now your responsibility to guarantee that none of ' +
@@ -14668,7 +14981,7 @@ function assertValidProps(props) {
       'probably not intentional.'
     ) : null);
   }
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     props.style == null || typeof props.style === 'object',
     'The `style` prop expects a mapping from style properties to values, ' +
     'not a string. For example, style={{marginRight: spacing + \'em\'}} when ' +
@@ -14677,10 +14990,10 @@ function assertValidProps(props) {
 }
 
 function putListener(id, registrationName, listener, transaction) {
-  if ("production" !== "production") {
+  if ("production" !== process.env.NODE_ENV) {
     // IE8 has no API for event capturing and the `onScroll` event doesn't
     // bubble.
-    ("production" !== "production" ? warning(
+    ("production" !== process.env.NODE_ENV ? warning(
       registrationName !== 'onScroll' || isEventSupported('scroll', true),
       'This browser doesn\'t support the `onScroll` event'
     ) : null);
@@ -14731,7 +15044,7 @@ var hasOwnProperty = {}.hasOwnProperty;
 
 function validateDangerousTag(tag) {
   if (!hasOwnProperty.call(validatedTagCache, tag)) {
-    ("production" !== "production" ? invariant(VALID_TAG_REGEX.test(tag), 'Invalid tag: %s', tag) : invariant(VALID_TAG_REGEX.test(tag)));
+    ("production" !== process.env.NODE_ENV ? invariant(VALID_TAG_REGEX.test(tag), 'Invalid tag: %s', tag) : invariant(VALID_TAG_REGEX.test(tag)));
     validatedTagCache[tag] = true;
   }
 }
@@ -14960,6 +15273,8 @@ ReactDOMComponent.Mixin = {
       if (propKey === STYLE) {
         if (nextProp) {
           nextProp = this._previousStyleCopy = assign({}, nextProp);
+        } else {
+          this._previousStyleCopy = null;
         }
         if (lastProp) {
           // Unset styles on `lastProp` but not on `nextProp`.
@@ -15088,7 +15403,8 @@ ReactDOMComponent.injection = {
 
 module.exports = ReactDOMComponent;
 
-},{"./CSSPropertyOperations":16,"./DOMProperty":21,"./DOMPropertyOperations":22,"./Object.assign":38,"./ReactBrowserEventEmitter":42,"./ReactComponentBrowserEnvironment":47,"./ReactMount":82,"./ReactMultiChild":83,"./ReactPerf":87,"./escapeTextContentForBrowser":128,"./invariant":147,"./isEventSupported":148,"./keyOf":153,"./warning":166}],55:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./CSSPropertyOperations":17,"./DOMProperty":22,"./DOMPropertyOperations":23,"./Object.assign":39,"./ReactBrowserEventEmitter":43,"./ReactComponentBrowserEnvironment":48,"./ReactMount":83,"./ReactMultiChild":84,"./ReactPerf":88,"./escapeTextContentForBrowser":129,"./invariant":148,"./isEventSupported":149,"./keyOf":154,"./warning":167,"_process":12}],56:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -15137,7 +15453,8 @@ var ReactDOMForm = ReactClass.createClass({
 
 module.exports = ReactDOMForm;
 
-},{"./EventConstants":26,"./LocalEventTrapMixin":36,"./ReactBrowserComponentMixin":41,"./ReactClass":45,"./ReactElement":69}],56:[function(require,module,exports){
+},{"./EventConstants":27,"./LocalEventTrapMixin":37,"./ReactBrowserComponentMixin":42,"./ReactClass":46,"./ReactElement":70}],57:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -15192,7 +15509,7 @@ var ReactDOMIDOperations = {
    */
   updatePropertyByID: function(id, name, value) {
     var node = ReactMount.getNode(id);
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       !INVALID_PROPERTY_ERRORS.hasOwnProperty(name),
       'updatePropertyByID(...): %s',
       INVALID_PROPERTY_ERRORS[name]
@@ -15218,7 +15535,7 @@ var ReactDOMIDOperations = {
    */
   deletePropertyByID: function(id, name, value) {
     var node = ReactMount.getNode(id);
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       !INVALID_PROPERTY_ERRORS.hasOwnProperty(name),
       'updatePropertyByID(...): %s',
       INVALID_PROPERTY_ERRORS[name]
@@ -15303,7 +15620,8 @@ ReactPerf.measureMethods(ReactDOMIDOperations, 'ReactDOMIDOperations', {
 
 module.exports = ReactDOMIDOperations;
 
-},{"./CSSPropertyOperations":16,"./DOMChildrenOperations":20,"./DOMPropertyOperations":22,"./ReactMount":82,"./ReactPerf":87,"./invariant":147,"./setInnerHTML":160}],57:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./CSSPropertyOperations":17,"./DOMChildrenOperations":21,"./DOMPropertyOperations":23,"./ReactMount":83,"./ReactPerf":88,"./invariant":148,"./setInnerHTML":161,"_process":12}],58:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -15348,7 +15666,7 @@ var ReactDOMIframe = ReactClass.createClass({
 
 module.exports = ReactDOMIframe;
 
-},{"./EventConstants":26,"./LocalEventTrapMixin":36,"./ReactBrowserComponentMixin":41,"./ReactClass":45,"./ReactElement":69}],58:[function(require,module,exports){
+},{"./EventConstants":27,"./LocalEventTrapMixin":37,"./ReactBrowserComponentMixin":42,"./ReactClass":46,"./ReactElement":70}],59:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -15394,7 +15712,8 @@ var ReactDOMImg = ReactClass.createClass({
 
 module.exports = ReactDOMImg;
 
-},{"./EventConstants":26,"./LocalEventTrapMixin":36,"./ReactBrowserComponentMixin":41,"./ReactClass":45,"./ReactElement":69}],59:[function(require,module,exports){
+},{"./EventConstants":27,"./LocalEventTrapMixin":37,"./ReactBrowserComponentMixin":42,"./ReactClass":46,"./ReactElement":70}],60:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -15544,13 +15863,13 @@ var ReactDOMInput = ReactClass.createClass({
           continue;
         }
         var otherID = ReactMount.getID(otherNode);
-        ("production" !== "production" ? invariant(
+        ("production" !== process.env.NODE_ENV ? invariant(
           otherID,
           'ReactDOMInput: Mixing React and non-React radio inputs with the ' +
           'same `name` is not supported.'
         ) : invariant(otherID));
         var otherInstance = instancesByReactID[otherID];
-        ("production" !== "production" ? invariant(
+        ("production" !== process.env.NODE_ENV ? invariant(
           otherInstance,
           'ReactDOMInput: Unknown radio button ID %s.',
           otherID
@@ -15569,7 +15888,9 @@ var ReactDOMInput = ReactClass.createClass({
 
 module.exports = ReactDOMInput;
 
-},{"./AutoFocusMixin":13,"./DOMPropertyOperations":22,"./LinkedValueUtils":35,"./Object.assign":38,"./ReactBrowserComponentMixin":41,"./ReactClass":45,"./ReactElement":69,"./ReactMount":82,"./ReactUpdates":99,"./invariant":147}],60:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./AutoFocusMixin":14,"./DOMPropertyOperations":23,"./LinkedValueUtils":36,"./Object.assign":39,"./ReactBrowserComponentMixin":42,"./ReactClass":46,"./ReactElement":70,"./ReactMount":83,"./ReactUpdates":100,"./invariant":148,"_process":12}],61:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -15602,8 +15923,8 @@ var ReactDOMOption = ReactClass.createClass({
 
   componentWillMount: function() {
     // TODO (yungsters): Remove support for `selected` in <option>.
-    if ("production" !== "production") {
-      ("production" !== "production" ? warning(
+    if ("production" !== process.env.NODE_ENV) {
+      ("production" !== process.env.NODE_ENV ? warning(
         this.props.selected == null,
         'Use the `defaultValue` or `value` props on <select> instead of ' +
         'setting `selected` on <option>.'
@@ -15619,7 +15940,8 @@ var ReactDOMOption = ReactClass.createClass({
 
 module.exports = ReactDOMOption;
 
-},{"./ReactBrowserComponentMixin":41,"./ReactClass":45,"./ReactElement":69,"./warning":166}],61:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ReactBrowserComponentMixin":42,"./ReactClass":46,"./ReactElement":70,"./warning":167,"_process":12}],62:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -15797,7 +16119,7 @@ var ReactDOMSelect = ReactClass.createClass({
 
 module.exports = ReactDOMSelect;
 
-},{"./AutoFocusMixin":13,"./LinkedValueUtils":35,"./Object.assign":38,"./ReactBrowserComponentMixin":41,"./ReactClass":45,"./ReactElement":69,"./ReactUpdates":99}],62:[function(require,module,exports){
+},{"./AutoFocusMixin":14,"./LinkedValueUtils":36,"./Object.assign":39,"./ReactBrowserComponentMixin":42,"./ReactClass":46,"./ReactElement":70,"./ReactUpdates":100}],63:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -16010,7 +16332,7 @@ var ReactDOMSelection = {
 
 module.exports = ReactDOMSelection;
 
-},{"./ExecutionEnvironment":32,"./getNodeForCharacterOffset":140,"./getTextContentAccessor":142}],63:[function(require,module,exports){
+},{"./ExecutionEnvironment":33,"./getNodeForCharacterOffset":141,"./getTextContentAccessor":143}],64:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -16127,7 +16449,8 @@ assign(ReactDOMTextComponent.prototype, {
 
 module.exports = ReactDOMTextComponent;
 
-},{"./DOMPropertyOperations":22,"./Object.assign":38,"./ReactComponentBrowserEnvironment":47,"./ReactDOMComponent":54,"./escapeTextContentForBrowser":128}],64:[function(require,module,exports){
+},{"./DOMPropertyOperations":23,"./Object.assign":39,"./ReactComponentBrowserEnvironment":48,"./ReactDOMComponent":55,"./escapeTextContentForBrowser":129}],65:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -16189,19 +16512,19 @@ var ReactDOMTextarea = ReactClass.createClass({
     // TODO (yungsters): Remove support for children content in <textarea>.
     var children = this.props.children;
     if (children != null) {
-      if ("production" !== "production") {
-        ("production" !== "production" ? warning(
+      if ("production" !== process.env.NODE_ENV) {
+        ("production" !== process.env.NODE_ENV ? warning(
           false,
           'Use the `defaultValue` or `value` props instead of setting ' +
           'children on <textarea>.'
         ) : null);
       }
-      ("production" !== "production" ? invariant(
+      ("production" !== process.env.NODE_ENV ? invariant(
         defaultValue == null,
         'If you supply `defaultValue` on a <textarea>, do not pass children.'
       ) : invariant(defaultValue == null));
       if (Array.isArray(children)) {
-        ("production" !== "production" ? invariant(
+        ("production" !== process.env.NODE_ENV ? invariant(
           children.length <= 1,
           '<textarea> can only have at most one child.'
         ) : invariant(children.length <= 1));
@@ -16227,7 +16550,7 @@ var ReactDOMTextarea = ReactClass.createClass({
     // Clone `this.props` so we don't mutate the input.
     var props = assign({}, this.props);
 
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       props.dangerouslySetInnerHTML == null,
       '`dangerouslySetInnerHTML` does not make sense on <textarea>.'
     ) : invariant(props.dangerouslySetInnerHTML == null));
@@ -16265,7 +16588,8 @@ var ReactDOMTextarea = ReactClass.createClass({
 
 module.exports = ReactDOMTextarea;
 
-},{"./AutoFocusMixin":13,"./DOMPropertyOperations":22,"./LinkedValueUtils":35,"./Object.assign":38,"./ReactBrowserComponentMixin":41,"./ReactClass":45,"./ReactElement":69,"./ReactUpdates":99,"./invariant":147,"./warning":166}],65:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./AutoFocusMixin":14,"./DOMPropertyOperations":23,"./LinkedValueUtils":36,"./Object.assign":39,"./ReactBrowserComponentMixin":42,"./ReactClass":46,"./ReactElement":70,"./ReactUpdates":100,"./invariant":148,"./warning":167,"_process":12}],66:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -16338,7 +16662,8 @@ var ReactDefaultBatchingStrategy = {
 
 module.exports = ReactDefaultBatchingStrategy;
 
-},{"./Object.assign":38,"./ReactUpdates":99,"./Transaction":115,"./emptyFunction":126}],66:[function(require,module,exports){
+},{"./Object.assign":39,"./ReactUpdates":100,"./Transaction":116,"./emptyFunction":127}],67:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -16482,7 +16807,7 @@ function inject() {
   ReactInjection.Component.injectEnvironment(ReactComponentBrowserEnvironment);
   ReactInjection.DOMComponent.injectIDOperations(ReactDOMIDOperations);
 
-  if ("production" !== "production") {
+  if ("production" !== process.env.NODE_ENV) {
     var url = (ExecutionEnvironment.canUseDOM && window.location.href) || '';
     if ((/[?&]react_perf\b/).test(url)) {
       var ReactDefaultPerf = require("./ReactDefaultPerf");
@@ -16495,7 +16820,8 @@ module.exports = {
   inject: inject
 };
 
-},{"./BeforeInputEventPlugin":14,"./ChangeEventPlugin":18,"./ClientReactRootIndex":19,"./DefaultEventPluginOrder":24,"./EnterLeaveEventPlugin":25,"./ExecutionEnvironment":32,"./HTMLDOMPropertyConfig":34,"./MobileSafariClickEventPlugin":37,"./ReactBrowserComponentMixin":41,"./ReactClass":45,"./ReactComponentBrowserEnvironment":47,"./ReactDOMButton":53,"./ReactDOMComponent":54,"./ReactDOMForm":55,"./ReactDOMIDOperations":56,"./ReactDOMIframe":57,"./ReactDOMImg":58,"./ReactDOMInput":59,"./ReactDOMOption":60,"./ReactDOMSelect":61,"./ReactDOMTextComponent":63,"./ReactDOMTextarea":64,"./ReactDefaultBatchingStrategy":65,"./ReactDefaultPerf":67,"./ReactElement":69,"./ReactEventListener":74,"./ReactInjection":76,"./ReactInstanceHandles":78,"./ReactMount":82,"./ReactReconcileTransaction":92,"./SVGDOMPropertyConfig":100,"./SelectEventPlugin":101,"./ServerReactRootIndex":102,"./SimpleEventPlugin":103,"./createFullPageComponent":123}],67:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./BeforeInputEventPlugin":15,"./ChangeEventPlugin":19,"./ClientReactRootIndex":20,"./DefaultEventPluginOrder":25,"./EnterLeaveEventPlugin":26,"./ExecutionEnvironment":33,"./HTMLDOMPropertyConfig":35,"./MobileSafariClickEventPlugin":38,"./ReactBrowserComponentMixin":42,"./ReactClass":46,"./ReactComponentBrowserEnvironment":48,"./ReactDOMButton":54,"./ReactDOMComponent":55,"./ReactDOMForm":56,"./ReactDOMIDOperations":57,"./ReactDOMIframe":58,"./ReactDOMImg":59,"./ReactDOMInput":60,"./ReactDOMOption":61,"./ReactDOMSelect":62,"./ReactDOMTextComponent":64,"./ReactDOMTextarea":65,"./ReactDefaultBatchingStrategy":66,"./ReactDefaultPerf":68,"./ReactElement":70,"./ReactEventListener":75,"./ReactInjection":77,"./ReactInstanceHandles":79,"./ReactMount":83,"./ReactReconcileTransaction":93,"./SVGDOMPropertyConfig":101,"./SelectEventPlugin":102,"./ServerReactRootIndex":103,"./SimpleEventPlugin":104,"./createFullPageComponent":124,"_process":12}],68:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -16761,7 +17087,7 @@ var ReactDefaultPerf = {
 
 module.exports = ReactDefaultPerf;
 
-},{"./DOMProperty":21,"./ReactDefaultPerfAnalysis":68,"./ReactMount":82,"./ReactPerf":87,"./performanceNow":158}],68:[function(require,module,exports){
+},{"./DOMProperty":22,"./ReactDefaultPerfAnalysis":69,"./ReactMount":83,"./ReactPerf":88,"./performanceNow":159}],69:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -16967,7 +17293,8 @@ var ReactDefaultPerfAnalysis = {
 
 module.exports = ReactDefaultPerfAnalysis;
 
-},{"./Object.assign":38}],69:[function(require,module,exports){
+},{"./Object.assign":39}],70:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -17013,7 +17340,7 @@ function defineWarningProperty(object, key) {
     },
 
     set: function(value) {
-      ("production" !== "production" ? warning(
+      ("production" !== process.env.NODE_ENV ? warning(
         false,
         'Don\'t set the %s property of the React element. Instead, ' +
         'specify the correct value when initially creating the element.',
@@ -17073,7 +17400,7 @@ var ReactElement = function(type, key, ref, owner, context, props) {
   // through the owner.
   this._context = context;
 
-  if ("production" !== "production") {
+  if ("production" !== process.env.NODE_ENV) {
     // The validation flag and props are currently mutative. We put them on
     // an external backing store so that we can freeze the whole object.
     // This can be replaced with a WeakMap once they are implemented in
@@ -17112,7 +17439,7 @@ ReactElement.prototype = {
   _isReactElement: true
 };
 
-if ("production" !== "production") {
+if ("production" !== process.env.NODE_ENV) {
   defineMutationMembrane(ReactElement.prototype);
 }
 
@@ -17191,7 +17518,7 @@ ReactElement.cloneAndReplaceProps = function(oldElement, newProps) {
     newProps
   );
 
-  if ("production" !== "production") {
+  if ("production" !== process.env.NODE_ENV) {
     // If the key on the original is valid, then the clone is valid
     newElement._store.validated = oldElement._store.validated;
   }
@@ -17273,7 +17600,9 @@ ReactElement.isValidElement = function(object) {
 
 module.exports = ReactElement;
 
-},{"./Object.assign":38,"./ReactContext":50,"./ReactCurrentOwner":51,"./warning":166}],70:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./Object.assign":39,"./ReactContext":51,"./ReactCurrentOwner":52,"./warning":167,"_process":12}],71:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -17440,9 +17769,9 @@ function warnAndMonitorForKeyUse(message, element, parentType) {
     childOwnerAddendum = (" It was passed a child from " + childOwnerName + ".");
   }
 
-  ("production" !== "production" ? warning(
+  ("production" !== process.env.NODE_ENV ? warning(
     false,
-    message + '%s%s See http://fb.me/react-warning-keys for more information.',
+    message + '%s%s See https://fb.me/react-warning-keys for more information.',
     parentOrOwnerAddendum,
     childOwnerAddendum
   ) : null);
@@ -17511,7 +17840,7 @@ function checkPropTypes(componentName, propTypes, props, location) {
       try {
         // This is intentionally an invariant that gets caught. It's the same
         // behavior as without this statement except with a better message.
-        ("production" !== "production" ? invariant(
+        ("production" !== process.env.NODE_ENV ? invariant(
           typeof propTypes[propName] === 'function',
           '%s: %s type `%s` is invalid; it must be a function, usually from ' +
           'React.PropTypes.',
@@ -17529,7 +17858,7 @@ function checkPropTypes(componentName, propTypes, props, location) {
         loggedTypeFailures[error.message] = true;
 
         var addendum = getDeclarationErrorAddendum(this);
-        ("production" !== "production" ? warning(false, 'Failed propType: %s%s', error.message, addendum) : null);
+        ("production" !== process.env.NODE_ENV ? warning(false, 'Failed propType: %s%s', error.message, addendum) : null);
       }
     }
   }
@@ -17564,11 +17893,11 @@ function warnForPropsMutation(propName, element) {
     ownerInfo = ' The element was created by ' + ownerName + '.';
   }
 
-  ("production" !== "production" ? warning(
+  ("production" !== process.env.NODE_ENV ? warning(
     false,
-    'Don\'t set .props.%s of the React component%s. ' +
-    'Instead, specify the correct value when ' +
-    'initially creating the element.%s',
+    'Don\'t set .props.%s of the React component%s. Instead, specify the ' +
+    'correct value when initially creating the element or use ' +
+    'React.cloneElement to make a new element with updated props.%s',
     propName,
     elementInfo,
     ownerInfo
@@ -17647,7 +17976,7 @@ function validatePropTypes(element) {
     );
   }
   if (typeof componentClass.getDefaultProps === 'function') {
-    ("production" !== "production" ? warning(
+    ("production" !== process.env.NODE_ENV ? warning(
       componentClass.getDefaultProps.isReactClassApproved,
       'getDefaultProps is only used on classic React.createClass ' +
       'definitions. Use a static property named `defaultProps` instead.'
@@ -17662,7 +17991,7 @@ var ReactElementValidator = {
   createElement: function(type, props, children) {
     // We warn in this case but don't throw. We expect the element creation to
     // succeed and there will likely be errors in render.
-    ("production" !== "production" ? warning(
+    ("production" !== process.env.NODE_ENV ? warning(
       type != null,
       'React.createElement: type should not be null or undefined. It should ' +
         'be a string (for DOM elements) or a ReactClass (for composite ' +
@@ -17694,7 +18023,7 @@ var ReactElementValidator = {
     // Legacy hook TODO: Warn if this is accessed
     validatedFactory.type = type;
 
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       try {
         Object.defineProperty(
           validatedFactory,
@@ -17702,7 +18031,7 @@ var ReactElementValidator = {
           {
             enumerable: false,
             get: function() {
-              ("production" !== "production" ? warning(
+              ("production" !== process.env.NODE_ENV ? warning(
                 false,
                 'Factory.type is deprecated. Access the class directly ' +
                 'before passing it to createFactory.'
@@ -17736,7 +18065,9 @@ var ReactElementValidator = {
 
 module.exports = ReactElementValidator;
 
-},{"./ReactCurrentOwner":51,"./ReactElement":69,"./ReactFragment":75,"./ReactNativeComponent":85,"./ReactPropTypeLocationNames":88,"./ReactPropTypeLocations":89,"./getIteratorFn":138,"./invariant":147,"./warning":166}],71:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ReactCurrentOwner":52,"./ReactElement":70,"./ReactFragment":76,"./ReactNativeComponent":86,"./ReactPropTypeLocationNames":89,"./ReactPropTypeLocations":90,"./getIteratorFn":139,"./invariant":148,"./warning":167,"_process":12}],72:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -17787,7 +18118,7 @@ ReactEmptyComponentType.prototype.componentWillUnmount = function() {
   deregisterNullComponentID(internalInstance._rootNodeID);
 };
 ReactEmptyComponentType.prototype.render = function() {
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     component,
     'Trying to return null from a render, but no null placeholder component ' +
     'was injected.'
@@ -17829,7 +18160,8 @@ var ReactEmptyComponent = {
 
 module.exports = ReactEmptyComponent;
 
-},{"./ReactElement":69,"./ReactInstanceMap":79,"./invariant":147}],72:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ReactElement":70,"./ReactInstanceMap":80,"./invariant":148,"_process":12}],73:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -17861,7 +18193,7 @@ var ReactErrorUtils = {
 
 module.exports = ReactErrorUtils;
 
-},{}],73:[function(require,module,exports){
+},{}],74:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -17911,7 +18243,7 @@ var ReactEventEmitterMixin = {
 
 module.exports = ReactEventEmitterMixin;
 
-},{"./EventPluginHub":28}],74:[function(require,module,exports){
+},{"./EventPluginHub":29}],75:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18094,7 +18426,8 @@ var ReactEventListener = {
 
 module.exports = ReactEventListener;
 
-},{"./EventListener":27,"./ExecutionEnvironment":32,"./Object.assign":38,"./PooledClass":39,"./ReactInstanceHandles":78,"./ReactMount":82,"./ReactUpdates":99,"./getEventTarget":137,"./getUnboundedScrollPosition":143}],75:[function(require,module,exports){
+},{"./EventListener":28,"./ExecutionEnvironment":33,"./Object.assign":39,"./PooledClass":40,"./ReactInstanceHandles":79,"./ReactMount":83,"./ReactUpdates":100,"./getEventTarget":138,"./getUnboundedScrollPosition":144}],76:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2015, Facebook, Inc.
  * All rights reserved.
@@ -18120,7 +18453,7 @@ var warning = require("./warning");
  * create a keyed fragment. The resulting data structure is opaque, for now.
  */
 
-if ("production" !== "production") {
+if ("production" !== process.env.NODE_ENV) {
   var fragmentKey = '_reactFragment';
   var didWarnKey = '_reactDidWarn';
   var canWarnForReactFragment = false;
@@ -18152,7 +18485,7 @@ if ("production" !== "production") {
     Object.defineProperty(obj, key, {
       enumerable: true,
       get: function() {
-        ("production" !== "production" ? warning(
+        ("production" !== process.env.NODE_ENV ? warning(
           this[didWarnKey],
           'A ReactFragment is an opaque type. Accessing any of its ' +
           'properties is deprecated. Pass it to one of the React.Children ' +
@@ -18162,7 +18495,7 @@ if ("production" !== "production") {
         return this[fragmentKey][key];
       },
       set: function(value) {
-        ("production" !== "production" ? warning(
+        ("production" !== process.env.NODE_ENV ? warning(
           this[didWarnKey],
           'A ReactFragment is an immutable opaque type. Mutating its ' +
           'properties is deprecated.'
@@ -18192,9 +18525,9 @@ var ReactFragment = {
   // Wrap a keyed object in an opaque proxy that warns you if you access any
   // of its properties.
   create: function(object) {
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       if (typeof object !== 'object' || !object || Array.isArray(object)) {
-        ("production" !== "production" ? warning(
+        ("production" !== process.env.NODE_ENV ? warning(
           false,
           'React.addons.createFragment only accepts a single object.',
           object
@@ -18202,7 +18535,7 @@ var ReactFragment = {
         return object;
       }
       if (ReactElement.isValidElement(object)) {
-        ("production" !== "production" ? warning(
+        ("production" !== process.env.NODE_ENV ? warning(
           false,
           'React.addons.createFragment does not accept a ReactElement ' +
           'without a wrapper object.'
@@ -18232,10 +18565,10 @@ var ReactFragment = {
   // Extract the original keyed object from the fragment opaque type. Warn if
   // a plain object is passed here.
   extract: function(fragment) {
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       if (canWarnForReactFragment) {
         if (!fragment[fragmentKey]) {
-          ("production" !== "production" ? warning(
+          ("production" !== process.env.NODE_ENV ? warning(
             didWarnForFragment(fragment),
             'Any use of a keyed object should be wrapped in ' +
             'React.addons.createFragment(object) before being passed as a ' +
@@ -18252,7 +18585,7 @@ var ReactFragment = {
   // is a fragment-like object, warn that it should be wrapped. Ignore if we
   // can't determine what kind of object this is.
   extractIfFragment: function(fragment) {
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       if (canWarnForReactFragment) {
         // If it is the opaque type, return the keyed object.
         if (fragment[fragmentKey]) {
@@ -18277,7 +18610,8 @@ var ReactFragment = {
 
 module.exports = ReactFragment;
 
-},{"./ReactElement":69,"./warning":166}],76:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ReactElement":70,"./warning":167,"_process":12}],77:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18319,7 +18653,7 @@ var ReactInjection = {
 
 module.exports = ReactInjection;
 
-},{"./DOMProperty":21,"./EventPluginHub":28,"./ReactBrowserEventEmitter":42,"./ReactClass":45,"./ReactComponentEnvironment":48,"./ReactDOMComponent":54,"./ReactEmptyComponent":71,"./ReactNativeComponent":85,"./ReactPerf":87,"./ReactRootIndex":95,"./ReactUpdates":99}],77:[function(require,module,exports){
+},{"./DOMProperty":22,"./EventPluginHub":29,"./ReactBrowserEventEmitter":43,"./ReactClass":46,"./ReactComponentEnvironment":49,"./ReactDOMComponent":55,"./ReactEmptyComponent":72,"./ReactNativeComponent":86,"./ReactPerf":88,"./ReactRootIndex":96,"./ReactUpdates":100}],78:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18454,7 +18788,8 @@ var ReactInputSelection = {
 
 module.exports = ReactInputSelection;
 
-},{"./ReactDOMSelection":62,"./containsNode":121,"./focusNode":131,"./getActiveElement":133}],78:[function(require,module,exports){
+},{"./ReactDOMSelection":63,"./containsNode":122,"./focusNode":132,"./getActiveElement":134}],79:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18553,13 +18888,13 @@ function getParentID(id) {
  * @private
  */
 function getNextDescendantID(ancestorID, destinationID) {
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     isValidID(ancestorID) && isValidID(destinationID),
     'getNextDescendantID(%s, %s): Received an invalid React DOM ID.',
     ancestorID,
     destinationID
   ) : invariant(isValidID(ancestorID) && isValidID(destinationID)));
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     isAncestorIDOf(ancestorID, destinationID),
     'getNextDescendantID(...): React has made an invalid assumption about ' +
     'the DOM hierarchy. Expected `%s` to be an ancestor of `%s`.',
@@ -18607,7 +18942,7 @@ function getFirstCommonAncestorID(oneID, twoID) {
     }
   }
   var longestCommonID = oneID.substr(0, lastCommonMarkerIndex);
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     isValidID(longestCommonID),
     'getFirstCommonAncestorID(%s, %s): Expected a valid React DOM ID: %s',
     oneID,
@@ -18632,13 +18967,13 @@ function getFirstCommonAncestorID(oneID, twoID) {
 function traverseParentPath(start, stop, cb, arg, skipFirst, skipLast) {
   start = start || '';
   stop = stop || '';
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     start !== stop,
     'traverseParentPath(...): Cannot traverse from and to the same ID, `%s`.',
     start
   ) : invariant(start !== stop));
   var traverseUp = isAncestorIDOf(stop, start);
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     traverseUp || isAncestorIDOf(start, stop),
     'traverseParentPath(%s, %s, ...): Cannot traverse from two IDs that do ' +
     'not have a parent path.',
@@ -18657,7 +18992,7 @@ function traverseParentPath(start, stop, cb, arg, skipFirst, skipLast) {
       // Only break //after// visiting `stop`.
       break;
     }
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       depth++ < MAX_TREE_DEPTH,
       'traverseParentPath(%s, %s, ...): Detected an infinite loop while ' +
       'traversing the React DOM ID tree. This may be due to malformed IDs: %s',
@@ -18788,7 +19123,8 @@ var ReactInstanceHandles = {
 
 module.exports = ReactInstanceHandles;
 
-},{"./ReactRootIndex":95,"./invariant":147}],79:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ReactRootIndex":96,"./invariant":148,"_process":12}],80:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18837,7 +19173,7 @@ var ReactInstanceMap = {
 
 module.exports = ReactInstanceMap;
 
-},{}],80:[function(require,module,exports){
+},{}],81:[function(require,module,exports){
 /**
  * Copyright 2015, Facebook, Inc.
  * All rights reserved.
@@ -18874,7 +19210,7 @@ var ReactLifeCycle = {
 
 module.exports = ReactLifeCycle;
 
-},{}],81:[function(require,module,exports){
+},{}],82:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18922,7 +19258,8 @@ var ReactMarkupChecksum = {
 
 module.exports = ReactMarkupChecksum;
 
-},{"./adler32":118}],82:[function(require,module,exports){
+},{"./adler32":119}],83:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18973,7 +19310,7 @@ var instancesByReactRootID = {};
 /** Mapping from reactRootID to `container` nodes. */
 var containersByReactRootID = {};
 
-if ("production" !== "production") {
+if ("production" !== process.env.NODE_ENV) {
   /** __DEV__-only mapping from reactRootID to root elements. */
   var rootElementsByReactRootID = {};
 }
@@ -19022,7 +19359,7 @@ function getID(node) {
     if (nodeCache.hasOwnProperty(id)) {
       var cached = nodeCache[id];
       if (cached !== node) {
-        ("production" !== "production" ? invariant(
+        ("production" !== process.env.NODE_ENV ? invariant(
           !isValid(cached, id),
           'ReactMount: Two valid but unequal nodes with the same `%s`: %s',
           ATTR_NAME, id
@@ -19104,7 +19441,7 @@ function getNodeFromInstance(instance) {
  */
 function isValid(node, id) {
   if (node) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       internalGetID(node) === id,
       'ReactMount: Unexpected modification of `%s`',
       ATTR_NAME
@@ -19249,7 +19586,7 @@ var ReactMount = {
       nextElement,
       container,
       callback) {
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       ReactElementValidator.checkAndWarnForMutatedProps(nextElement);
     }
 
@@ -19260,7 +19597,7 @@ var ReactMount = {
       }
     });
 
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       // Record the root element in case it later gets transplanted.
       rootElementsByReactRootID[getReactRootID(container)] =
         getReactRootElementInContainer(container);
@@ -19277,7 +19614,7 @@ var ReactMount = {
    * @return {string} reactRoot ID prefix
    */
   _registerComponent: function(nextComponent, container) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       container && (
         (container.nodeType === ELEMENT_NODE_TYPE || container.nodeType === DOC_NODE_TYPE)
       ),
@@ -19308,7 +19645,7 @@ var ReactMount = {
     // Various parts of our code (such as ReactCompositeComponent's
     // _renderValidatedComponent) assume that calls to render aren't nested;
     // verify that that's the case.
-    ("production" !== "production" ? warning(
+    ("production" !== process.env.NODE_ENV ? warning(
       ReactCurrentOwner.current == null,
       '_renderNewRootComponent(): Render methods should be a pure function ' +
       'of props and state; triggering nested component updates from ' +
@@ -19334,7 +19671,7 @@ var ReactMount = {
       shouldReuseMarkup
     );
 
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       // Record the root element in case it later gets transplanted.
       rootElementsByReactRootID[reactRootID] =
         getReactRootElementInContainer(container);
@@ -19356,7 +19693,7 @@ var ReactMount = {
    * @return {ReactComponent} Component instance rendered in `container`.
    */
   render: function(nextElement, container, callback) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       ReactElement.isValidElement(nextElement),
       'React.render(): Invalid component element.%s',
       (
@@ -19394,12 +19731,12 @@ var ReactMount = {
     var containerHasReactMarkup =
       reactRootElement && ReactMount.isRenderedByReact(reactRootElement);
 
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       if (!containerHasReactMarkup || reactRootElement.nextSibling) {
         var rootElementSibling = reactRootElement;
         while (rootElementSibling) {
           if (ReactMount.isRenderedByReact(rootElementSibling)) {
-            ("production" !== "production" ? warning(
+            ("production" !== process.env.NODE_ENV ? warning(
               false,
               'render(): Target node has markup rendered by React, but there ' +
               'are unrelated nodes as well. This is most commonly caused by ' +
@@ -19451,7 +19788,7 @@ var ReactMount = {
    */
   constructAndRenderComponentByID: function(constructor, props, id) {
     var domNode = document.getElementById(id);
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       domNode,
       'Tried to get element with id of "%s" but it is not present on the page.',
       id
@@ -19493,7 +19830,7 @@ var ReactMount = {
     // _renderValidatedComponent) assume that calls to render aren't nested;
     // verify that that's the case. (Strictly speaking, unmounting won't cause a
     // render but we still don't expect to be in a render call here.)
-    ("production" !== "production" ? warning(
+    ("production" !== process.env.NODE_ENV ? warning(
       ReactCurrentOwner.current == null,
       'unmountComponentAtNode(): Render methods should be a pure function of ' +
       'props and state; triggering nested component updates from render is ' +
@@ -19501,7 +19838,7 @@ var ReactMount = {
       'componentDidUpdate.'
     ) : null);
 
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       container && (
         (container.nodeType === ELEMENT_NODE_TYPE || container.nodeType === DOC_NODE_TYPE)
       ),
@@ -19518,7 +19855,7 @@ var ReactMount = {
     ReactMount.unmountComponentFromNode(component, container);
     delete instancesByReactRootID[reactRootID];
     delete containersByReactRootID[reactRootID];
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       delete rootElementsByReactRootID[reactRootID];
     }
     return true;
@@ -19557,10 +19894,10 @@ var ReactMount = {
     var reactRootID = ReactInstanceHandles.getReactRootIDFromNodeID(id);
     var container = containersByReactRootID[reactRootID];
 
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       var rootElement = rootElementsByReactRootID[reactRootID];
       if (rootElement && rootElement.parentNode !== container) {
-        ("production" !== "production" ? invariant(
+        ("production" !== process.env.NODE_ENV ? invariant(
           // Call internalGetID here because getID calls isValid which calls
           // findReactContainerForID (this function).
           internalGetID(rootElement) === reactRootID,
@@ -19578,7 +19915,7 @@ var ReactMount = {
           // warning is when the container is empty.
           rootElementsByReactRootID[reactRootID] = containerChild;
         } else {
-          ("production" !== "production" ? warning(
+          ("production" !== process.env.NODE_ENV ? warning(
             false,
             'ReactMount: Root element has been removed from its original ' +
             'container. New container:', rootElement.parentNode
@@ -19702,7 +20039,7 @@ var ReactMount = {
 
     firstChildren.length = 0;
 
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       false,
       'findComponentRoot(..., %s): Unable to find element. This probably ' +
       'means the DOM was unexpectedly mutated (e.g., by the browser), ' +
@@ -19716,7 +20053,7 @@ var ReactMount = {
   },
 
   _mountImageIntoNode: function(markup, container, shouldReuseMarkup) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       container && (
         (container.nodeType === ELEMENT_NODE_TYPE || container.nodeType === DOC_NODE_TYPE)
       ),
@@ -19746,7 +20083,7 @@ var ReactMount = {
           markup.substring(diffIndex - 20, diffIndex + 20) +
           '\n (server) ' + rootMarkup.substring(diffIndex - 20, diffIndex + 20);
 
-        ("production" !== "production" ? invariant(
+        ("production" !== process.env.NODE_ENV ? invariant(
           container.nodeType !== DOC_NODE_TYPE,
           'You\'re trying to render a component to the document using ' +
           'server rendering but the checksum was invalid. This usually ' +
@@ -19759,8 +20096,8 @@ var ReactMount = {
           difference
         ) : invariant(container.nodeType !== DOC_NODE_TYPE));
 
-        if ("production" !== "production") {
-          ("production" !== "production" ? warning(
+        if ("production" !== process.env.NODE_ENV) {
+          ("production" !== process.env.NODE_ENV ? warning(
             false,
             'React attempted to reuse markup in a container but the ' +
             'checksum was invalid. This generally means that you are ' +
@@ -19776,7 +20113,7 @@ var ReactMount = {
       }
     }
 
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       container.nodeType !== DOC_NODE_TYPE,
       'You\'re trying to render a component to the document but ' +
         'you didn\'t use server rendering. We can\'t do this ' +
@@ -19811,7 +20148,8 @@ ReactPerf.measureMethods(ReactMount, 'ReactMount', {
 
 module.exports = ReactMount;
 
-},{"./DOMProperty":21,"./ReactBrowserEventEmitter":42,"./ReactCurrentOwner":51,"./ReactElement":69,"./ReactElementValidator":70,"./ReactEmptyComponent":71,"./ReactInstanceHandles":78,"./ReactInstanceMap":79,"./ReactMarkupChecksum":81,"./ReactPerf":87,"./ReactReconciler":93,"./ReactUpdateQueue":98,"./ReactUpdates":99,"./containsNode":121,"./emptyObject":127,"./getReactRootElementInContainer":141,"./instantiateReactComponent":146,"./invariant":147,"./setInnerHTML":160,"./shouldUpdateReactComponent":163,"./warning":166}],83:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./DOMProperty":22,"./ReactBrowserEventEmitter":43,"./ReactCurrentOwner":52,"./ReactElement":70,"./ReactElementValidator":71,"./ReactEmptyComponent":72,"./ReactInstanceHandles":79,"./ReactInstanceMap":80,"./ReactMarkupChecksum":82,"./ReactPerf":88,"./ReactReconciler":94,"./ReactUpdateQueue":99,"./ReactUpdates":100,"./containsNode":122,"./emptyObject":128,"./getReactRootElementInContainer":142,"./instantiateReactComponent":147,"./invariant":148,"./setInnerHTML":161,"./shouldUpdateReactComponent":164,"./warning":167,"_process":12}],84:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20241,7 +20579,7 @@ var ReactMultiChild = {
 
 module.exports = ReactMultiChild;
 
-},{"./ReactChildReconciler":43,"./ReactComponentEnvironment":48,"./ReactMultiChildUpdateTypes":84,"./ReactReconciler":93}],84:[function(require,module,exports){
+},{"./ReactChildReconciler":44,"./ReactComponentEnvironment":49,"./ReactMultiChildUpdateTypes":85,"./ReactReconciler":94}],85:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20274,7 +20612,8 @@ var ReactMultiChildUpdateTypes = keyMirror({
 
 module.exports = ReactMultiChildUpdateTypes;
 
-},{"./keyMirror":152}],85:[function(require,module,exports){
+},{"./keyMirror":153}],86:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -20345,7 +20684,7 @@ function getComponentClassForElement(element) {
  * @return {function} The internal class constructor function.
  */
 function createInternalComponent(element) {
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     genericComponentClass,
     'There is no registered component for the tag %s',
     element.type
@@ -20379,7 +20718,9 @@ var ReactNativeComponent = {
 
 module.exports = ReactNativeComponent;
 
-},{"./Object.assign":38,"./invariant":147}],86:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./Object.assign":39,"./invariant":148,"_process":12}],87:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20449,7 +20790,7 @@ var ReactOwner = {
    * @internal
    */
   addComponentAsRefTo: function(component, ref, owner) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       ReactOwner.isValidOwner(owner),
       'addComponentAsRefTo(...): Only a ReactOwner can have refs. This ' +
       'usually means that you\'re trying to add a ref to a component that ' +
@@ -20470,7 +20811,7 @@ var ReactOwner = {
    * @internal
    */
   removeComponentAsRefFrom: function(component, ref, owner) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       ReactOwner.isValidOwner(owner),
       'removeComponentAsRefFrom(...): Only a ReactOwner can have refs. This ' +
       'usually means that you\'re trying to remove a ref to a component that ' +
@@ -20489,7 +20830,9 @@ var ReactOwner = {
 
 module.exports = ReactOwner;
 
-},{"./invariant":147}],87:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./invariant":148,"_process":12}],88:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20527,7 +20870,7 @@ var ReactPerf = {
    * @param {object<string>} methodNames
    */
   measureMethods: function(object, objectName, methodNames) {
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       for (var key in methodNames) {
         if (!methodNames.hasOwnProperty(key)) {
           continue;
@@ -20550,7 +20893,7 @@ var ReactPerf = {
    * @return {function}
    */
   measure: function(objName, fnName, func) {
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       var measuredFunc = null;
       var wrapper = function() {
         if (ReactPerf.enableMeasure) {
@@ -20591,7 +20934,9 @@ function _noMeasure(objName, fnName, func) {
 
 module.exports = ReactPerf;
 
-},{}],88:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"_process":12}],89:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20607,7 +20952,7 @@ module.exports = ReactPerf;
 
 var ReactPropTypeLocationNames = {};
 
-if ("production" !== "production") {
+if ("production" !== process.env.NODE_ENV) {
   ReactPropTypeLocationNames = {
     prop: 'prop',
     context: 'context',
@@ -20617,7 +20962,8 @@ if ("production" !== "production") {
 
 module.exports = ReactPropTypeLocationNames;
 
-},{}],89:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"_process":12}],90:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20641,7 +20987,7 @@ var ReactPropTypeLocations = keyMirror({
 
 module.exports = ReactPropTypeLocations;
 
-},{"./keyMirror":152}],90:[function(require,module,exports){
+},{"./keyMirror":153}],91:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20990,7 +21336,7 @@ function getPreciseType(propValue) {
 
 module.exports = ReactPropTypes;
 
-},{"./ReactElement":69,"./ReactFragment":75,"./ReactPropTypeLocationNames":88,"./emptyFunction":126}],91:[function(require,module,exports){
+},{"./ReactElement":70,"./ReactFragment":76,"./ReactPropTypeLocationNames":89,"./emptyFunction":127}],92:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21046,7 +21392,7 @@ PooledClass.addPoolingTo(ReactPutListenerQueue);
 
 module.exports = ReactPutListenerQueue;
 
-},{"./Object.assign":38,"./PooledClass":39,"./ReactBrowserEventEmitter":42}],92:[function(require,module,exports){
+},{"./Object.assign":39,"./PooledClass":40,"./ReactBrowserEventEmitter":43}],93:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21222,7 +21568,8 @@ PooledClass.addPoolingTo(ReactReconcileTransaction);
 
 module.exports = ReactReconcileTransaction;
 
-},{"./CallbackQueue":17,"./Object.assign":38,"./PooledClass":39,"./ReactBrowserEventEmitter":42,"./ReactInputSelection":77,"./ReactPutListenerQueue":91,"./Transaction":115}],93:[function(require,module,exports){
+},{"./CallbackQueue":18,"./Object.assign":39,"./PooledClass":40,"./ReactBrowserEventEmitter":43,"./ReactInputSelection":78,"./ReactPutListenerQueue":92,"./Transaction":116}],94:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21261,7 +21608,7 @@ var ReactReconciler = {
    */
   mountComponent: function(internalInstance, rootID, transaction, context) {
     var markup = internalInstance.mountComponent(rootID, transaction, context);
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       ReactElementValidator.checkAndWarnForMutatedProps(
         internalInstance._currentElement
       );
@@ -21306,7 +21653,7 @@ var ReactReconciler = {
       return;
     }
 
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       ReactElementValidator.checkAndWarnForMutatedProps(nextElement);
     }
 
@@ -21344,7 +21691,8 @@ var ReactReconciler = {
 
 module.exports = ReactReconciler;
 
-},{"./ReactElementValidator":70,"./ReactRef":94}],94:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ReactElementValidator":71,"./ReactRef":95,"_process":12}],95:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21415,7 +21763,7 @@ ReactRef.detachRefs = function(instance, element) {
 
 module.exports = ReactRef;
 
-},{"./ReactOwner":86}],95:[function(require,module,exports){
+},{"./ReactOwner":87}],96:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21446,7 +21794,8 @@ var ReactRootIndex = {
 
 module.exports = ReactRootIndex;
 
-},{}],96:[function(require,module,exports){
+},{}],97:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21475,7 +21824,7 @@ var invariant = require("./invariant");
  * @return {string} the HTML markup
  */
 function renderToString(element) {
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     ReactElement.isValidElement(element),
     'renderToString(): You must pass a valid ReactElement.'
   ) : invariant(ReactElement.isValidElement(element)));
@@ -21502,7 +21851,7 @@ function renderToString(element) {
  * (for generating static pages)
  */
 function renderToStaticMarkup(element) {
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     ReactElement.isValidElement(element),
     'renderToStaticMarkup(): You must pass a valid ReactElement.'
   ) : invariant(ReactElement.isValidElement(element)));
@@ -21526,7 +21875,8 @@ module.exports = {
   renderToStaticMarkup: renderToStaticMarkup
 };
 
-},{"./ReactElement":69,"./ReactInstanceHandles":78,"./ReactMarkupChecksum":81,"./ReactServerRenderingTransaction":97,"./emptyObject":127,"./instantiateReactComponent":146,"./invariant":147}],97:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ReactElement":70,"./ReactInstanceHandles":79,"./ReactMarkupChecksum":82,"./ReactServerRenderingTransaction":98,"./emptyObject":128,"./instantiateReactComponent":147,"./invariant":148,"_process":12}],98:[function(require,module,exports){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -21639,7 +21989,8 @@ PooledClass.addPoolingTo(ReactServerRenderingTransaction);
 
 module.exports = ReactServerRenderingTransaction;
 
-},{"./CallbackQueue":17,"./Object.assign":38,"./PooledClass":39,"./ReactPutListenerQueue":91,"./Transaction":115,"./emptyFunction":126}],98:[function(require,module,exports){
+},{"./CallbackQueue":18,"./Object.assign":39,"./PooledClass":40,"./ReactPutListenerQueue":92,"./Transaction":116,"./emptyFunction":127}],99:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2015, Facebook, Inc.
  * All rights reserved.
@@ -21674,7 +22025,7 @@ function enqueueUpdate(internalInstance) {
 }
 
 function getInternalInstanceReadyForUpdate(publicInstance, callerName) {
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     ReactCurrentOwner.current == null,
     '%s(...): Cannot update during an existing state transition ' +
     '(such as within `render`). Render methods should be a pure function ' +
@@ -21684,11 +22035,11 @@ function getInternalInstanceReadyForUpdate(publicInstance, callerName) {
 
   var internalInstance = ReactInstanceMap.get(publicInstance);
   if (!internalInstance) {
-    if ("production" !== "production") {
+    if ("production" !== process.env.NODE_ENV) {
       // Only warn when we have a callerName. Otherwise we should be silent.
       // We're probably calling from enqueueCallback. We don't want to warn
       // there because we already warned for the corresponding lifecycle method.
-      ("production" !== "production" ? warning(
+      ("production" !== process.env.NODE_ENV ? warning(
         !callerName,
         '%s(...): Can only update a mounted or mounting component. ' +
         'This usually means you called %s() on an unmounted ' +
@@ -21722,7 +22073,7 @@ var ReactUpdateQueue = {
    * @internal
    */
   enqueueCallback: function(publicInstance, callback) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       typeof callback === 'function',
       'enqueueCallback(...): You called `setProps`, `replaceProps`, ' +
       '`setState`, `replaceState`, or `forceUpdate` with a callback that ' +
@@ -21753,7 +22104,7 @@ var ReactUpdateQueue = {
   },
 
   enqueueCallbackInternal: function(internalInstance, callback) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       typeof callback === 'function',
       'enqueueCallback(...): You called `setProps`, `replaceProps`, ' +
       '`setState`, `replaceState`, or `forceUpdate` with a callback that ' +
@@ -21867,7 +22218,7 @@ var ReactUpdateQueue = {
       return;
     }
 
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       internalInstance._isTopLevel,
       'setProps(...): You called `setProps` on a ' +
       'component with a parent. This is an anti-pattern since props will ' +
@@ -21906,7 +22257,7 @@ var ReactUpdateQueue = {
       return;
     }
 
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       internalInstance._isTopLevel,
       'replaceProps(...): You called `replaceProps` on a ' +
       'component with a parent. This is an anti-pattern since props will ' +
@@ -21936,7 +22287,9 @@ var ReactUpdateQueue = {
 
 module.exports = ReactUpdateQueue;
 
-},{"./Object.assign":38,"./ReactCurrentOwner":51,"./ReactElement":69,"./ReactInstanceMap":79,"./ReactLifeCycle":80,"./ReactUpdates":99,"./invariant":147,"./warning":166}],99:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./Object.assign":39,"./ReactCurrentOwner":52,"./ReactElement":70,"./ReactInstanceMap":80,"./ReactLifeCycle":81,"./ReactUpdates":100,"./invariant":148,"./warning":167,"_process":12}],100:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21968,7 +22321,7 @@ var asapEnqueued = false;
 var batchingStrategy = null;
 
 function ensureInjected() {
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     ReactUpdates.ReactReconcileTransaction && batchingStrategy,
     'ReactUpdates: must inject a reconcile transaction class and batching ' +
     'strategy'
@@ -22062,7 +22415,7 @@ function mountOrderComparator(c1, c2) {
 
 function runBatchedUpdates(transaction) {
   var len = transaction.dirtyComponentsLength;
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     len === dirtyComponents.length,
     'Expected flush transaction\'s stored dirty-components length (%s) to ' +
     'match dirty-components array length (%s).',
@@ -22142,7 +22495,7 @@ function enqueueUpdate(component) {
   // verify that that's the case. (This is called by each top-level update
   // function, like setProps, setState, forceUpdate, etc.; creation and
   // destruction of top-level components is guarded in ReactMount.)
-  ("production" !== "production" ? warning(
+  ("production" !== process.env.NODE_ENV ? warning(
     ReactCurrentOwner.current == null,
     'enqueueUpdate(): Render methods should be a pure function of props ' +
     'and state; triggering nested component updates from render is not ' +
@@ -22163,7 +22516,7 @@ function enqueueUpdate(component) {
  * if no updates are currently being performed.
  */
 function asap(callback, context) {
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     batchingStrategy.isBatchingUpdates,
     'ReactUpdates.asap: Can\'t enqueue an asap callback in a context where' +
     'updates are not being batched.'
@@ -22174,7 +22527,7 @@ function asap(callback, context) {
 
 var ReactUpdatesInjection = {
   injectReconcileTransaction: function(ReconcileTransaction) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       ReconcileTransaction,
       'ReactUpdates: must provide a reconcile transaction class'
     ) : invariant(ReconcileTransaction));
@@ -22182,15 +22535,15 @@ var ReactUpdatesInjection = {
   },
 
   injectBatchingStrategy: function(_batchingStrategy) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       _batchingStrategy,
       'ReactUpdates: must provide a batching strategy'
     ) : invariant(_batchingStrategy));
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       typeof _batchingStrategy.batchedUpdates === 'function',
       'ReactUpdates: must provide a batchedUpdates() function'
     ) : invariant(typeof _batchingStrategy.batchedUpdates === 'function'));
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       typeof _batchingStrategy.isBatchingUpdates === 'boolean',
       'ReactUpdates: must provide an isBatchingUpdates boolean attribute'
     ) : invariant(typeof _batchingStrategy.isBatchingUpdates === 'boolean'));
@@ -22216,7 +22569,8 @@ var ReactUpdates = {
 
 module.exports = ReactUpdates;
 
-},{"./CallbackQueue":17,"./Object.assign":38,"./PooledClass":39,"./ReactCurrentOwner":51,"./ReactPerf":87,"./ReactReconciler":93,"./Transaction":115,"./invariant":147,"./warning":166}],100:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./CallbackQueue":18,"./Object.assign":39,"./PooledClass":40,"./ReactCurrentOwner":52,"./ReactPerf":88,"./ReactReconciler":94,"./Transaction":116,"./invariant":148,"./warning":167,"_process":12}],101:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -22238,6 +22592,7 @@ var MUST_USE_ATTRIBUTE = DOMProperty.injection.MUST_USE_ATTRIBUTE;
 
 var SVGDOMPropertyConfig = {
   Properties: {
+    clipPath: MUST_USE_ATTRIBUTE,
     cx: MUST_USE_ATTRIBUTE,
     cy: MUST_USE_ATTRIBUTE,
     d: MUST_USE_ATTRIBUTE,
@@ -22283,6 +22638,7 @@ var SVGDOMPropertyConfig = {
     y: MUST_USE_ATTRIBUTE
   },
   DOMAttributeNames: {
+    clipPath: 'clip-path',
     fillOpacity: 'fill-opacity',
     fontFamily: 'font-family',
     fontSize: 'font-size',
@@ -22308,7 +22664,7 @@ var SVGDOMPropertyConfig = {
 
 module.exports = SVGDOMPropertyConfig;
 
-},{"./DOMProperty":21}],101:[function(require,module,exports){
+},{"./DOMProperty":22}],102:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -22503,7 +22859,7 @@ var SelectEventPlugin = {
 
 module.exports = SelectEventPlugin;
 
-},{"./EventConstants":26,"./EventPropagators":31,"./ReactInputSelection":77,"./SyntheticEvent":107,"./getActiveElement":133,"./isTextInputElement":150,"./keyOf":153,"./shallowEqual":162}],102:[function(require,module,exports){
+},{"./EventConstants":27,"./EventPropagators":32,"./ReactInputSelection":78,"./SyntheticEvent":108,"./getActiveElement":134,"./isTextInputElement":151,"./keyOf":154,"./shallowEqual":163}],103:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -22534,7 +22890,8 @@ var ServerReactRootIndex = {
 
 module.exports = ServerReactRootIndex;
 
-},{}],103:[function(require,module,exports){
+},{}],104:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -22841,7 +23198,7 @@ var SimpleEventPlugin = {
   executeDispatch: function(event, listener, domID) {
     var returnValue = EventPluginUtils.executeDispatch(event, listener, domID);
 
-    ("production" !== "production" ? warning(
+    ("production" !== process.env.NODE_ENV ? warning(
       typeof returnValue !== 'boolean',
       'Returning `false` from an event handler is deprecated and will be ' +
       'ignored in a future release. Instead, manually call ' +
@@ -22942,7 +23299,7 @@ var SimpleEventPlugin = {
         EventConstructor = SyntheticClipboardEvent;
         break;
     }
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       EventConstructor,
       'SimpleEventPlugin: Unhandled event type, `%s`.',
       topLevelType
@@ -22960,7 +23317,8 @@ var SimpleEventPlugin = {
 
 module.exports = SimpleEventPlugin;
 
-},{"./EventConstants":26,"./EventPluginUtils":30,"./EventPropagators":31,"./SyntheticClipboardEvent":104,"./SyntheticDragEvent":106,"./SyntheticEvent":107,"./SyntheticFocusEvent":108,"./SyntheticKeyboardEvent":110,"./SyntheticMouseEvent":111,"./SyntheticTouchEvent":112,"./SyntheticUIEvent":113,"./SyntheticWheelEvent":114,"./getEventCharCode":134,"./invariant":147,"./keyOf":153,"./warning":166}],104:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./EventConstants":27,"./EventPluginUtils":31,"./EventPropagators":32,"./SyntheticClipboardEvent":105,"./SyntheticDragEvent":107,"./SyntheticEvent":108,"./SyntheticFocusEvent":109,"./SyntheticKeyboardEvent":111,"./SyntheticMouseEvent":112,"./SyntheticTouchEvent":113,"./SyntheticUIEvent":114,"./SyntheticWheelEvent":115,"./getEventCharCode":135,"./invariant":148,"./keyOf":154,"./warning":167,"_process":12}],105:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -23005,7 +23363,7 @@ SyntheticEvent.augmentClass(SyntheticClipboardEvent, ClipboardEventInterface);
 
 module.exports = SyntheticClipboardEvent;
 
-},{"./SyntheticEvent":107}],105:[function(require,module,exports){
+},{"./SyntheticEvent":108}],106:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -23050,7 +23408,7 @@ SyntheticEvent.augmentClass(
 
 module.exports = SyntheticCompositionEvent;
 
-},{"./SyntheticEvent":107}],106:[function(require,module,exports){
+},{"./SyntheticEvent":108}],107:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -23089,7 +23447,7 @@ SyntheticMouseEvent.augmentClass(SyntheticDragEvent, DragEventInterface);
 
 module.exports = SyntheticDragEvent;
 
-},{"./SyntheticMouseEvent":111}],107:[function(require,module,exports){
+},{"./SyntheticMouseEvent":112}],108:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -23255,7 +23613,7 @@ PooledClass.addPoolingTo(SyntheticEvent, PooledClass.threeArgumentPooler);
 
 module.exports = SyntheticEvent;
 
-},{"./Object.assign":38,"./PooledClass":39,"./emptyFunction":126,"./getEventTarget":137}],108:[function(require,module,exports){
+},{"./Object.assign":39,"./PooledClass":40,"./emptyFunction":127,"./getEventTarget":138}],109:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -23294,7 +23652,7 @@ SyntheticUIEvent.augmentClass(SyntheticFocusEvent, FocusEventInterface);
 
 module.exports = SyntheticFocusEvent;
 
-},{"./SyntheticUIEvent":113}],109:[function(require,module,exports){
+},{"./SyntheticUIEvent":114}],110:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -23340,7 +23698,7 @@ SyntheticEvent.augmentClass(
 
 module.exports = SyntheticInputEvent;
 
-},{"./SyntheticEvent":107}],110:[function(require,module,exports){
+},{"./SyntheticEvent":108}],111:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -23427,7 +23785,7 @@ SyntheticUIEvent.augmentClass(SyntheticKeyboardEvent, KeyboardEventInterface);
 
 module.exports = SyntheticKeyboardEvent;
 
-},{"./SyntheticUIEvent":113,"./getEventCharCode":134,"./getEventKey":135,"./getEventModifierState":136}],111:[function(require,module,exports){
+},{"./SyntheticUIEvent":114,"./getEventCharCode":135,"./getEventKey":136,"./getEventModifierState":137}],112:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -23508,7 +23866,7 @@ SyntheticUIEvent.augmentClass(SyntheticMouseEvent, MouseEventInterface);
 
 module.exports = SyntheticMouseEvent;
 
-},{"./SyntheticUIEvent":113,"./ViewportMetrics":116,"./getEventModifierState":136}],112:[function(require,module,exports){
+},{"./SyntheticUIEvent":114,"./ViewportMetrics":117,"./getEventModifierState":137}],113:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -23556,7 +23914,7 @@ SyntheticUIEvent.augmentClass(SyntheticTouchEvent, TouchEventInterface);
 
 module.exports = SyntheticTouchEvent;
 
-},{"./SyntheticUIEvent":113,"./getEventModifierState":136}],113:[function(require,module,exports){
+},{"./SyntheticUIEvent":114,"./getEventModifierState":137}],114:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -23618,7 +23976,7 @@ SyntheticEvent.augmentClass(SyntheticUIEvent, UIEventInterface);
 
 module.exports = SyntheticUIEvent;
 
-},{"./SyntheticEvent":107,"./getEventTarget":137}],114:[function(require,module,exports){
+},{"./SyntheticEvent":108,"./getEventTarget":138}],115:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -23679,7 +24037,8 @@ SyntheticMouseEvent.augmentClass(SyntheticWheelEvent, WheelEventInterface);
 
 module.exports = SyntheticWheelEvent;
 
-},{"./SyntheticMouseEvent":111}],115:[function(require,module,exports){
+},{"./SyntheticMouseEvent":112}],116:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -23798,7 +24157,7 @@ var Mixin = {
    * @return Return value from `method`.
    */
   perform: function(method, scope, a, b, c, d, e, f) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       !this.isInTransaction(),
       'Transaction.perform(...): Cannot initialize a transaction when there ' +
       'is already an outstanding transaction.'
@@ -23870,7 +24229,7 @@ var Mixin = {
    * invoked).
    */
   closeAll: function(startIndex) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       this.isInTransaction(),
       'Transaction.closeAll(): Cannot close transaction when none are open.'
     ) : invariant(this.isInTransaction()));
@@ -23918,7 +24277,8 @@ var Transaction = {
 
 module.exports = Transaction;
 
-},{"./invariant":147}],116:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./invariant":148,"_process":12}],117:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -23947,7 +24307,8 @@ var ViewportMetrics = {
 
 module.exports = ViewportMetrics;
 
-},{}],117:[function(require,module,exports){
+},{}],118:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -23978,7 +24339,7 @@ var invariant = require("./invariant");
  */
 
 function accumulateInto(current, next) {
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     next != null,
     'accumulateInto(...): Accumulated items must not be null or undefined.'
   ) : invariant(next != null));
@@ -24011,7 +24372,8 @@ function accumulateInto(current, next) {
 
 module.exports = accumulateInto;
 
-},{"./invariant":147}],118:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./invariant":148,"_process":12}],119:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24045,7 +24407,7 @@ function adler32(data) {
 
 module.exports = adler32;
 
-},{}],119:[function(require,module,exports){
+},{}],120:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24077,7 +24439,7 @@ function camelize(string) {
 
 module.exports = camelize;
 
-},{}],120:[function(require,module,exports){
+},{}],121:[function(require,module,exports){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -24119,7 +24481,7 @@ function camelizeStyleName(string) {
 
 module.exports = camelizeStyleName;
 
-},{"./camelize":119}],121:[function(require,module,exports){
+},{"./camelize":120}],122:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24163,7 +24525,7 @@ function containsNode(outerNode, innerNode) {
 
 module.exports = containsNode;
 
-},{"./isTextNode":151}],122:[function(require,module,exports){
+},{"./isTextNode":152}],123:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24249,7 +24611,8 @@ function createArrayFromMixed(obj) {
 
 module.exports = createArrayFromMixed;
 
-},{"./toArray":164}],123:[function(require,module,exports){
+},{"./toArray":165}],124:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24289,7 +24652,7 @@ function createFullPageComponent(tag) {
     displayName: 'ReactFullPageComponent' + tag,
 
     componentWillUnmount: function() {
-      ("production" !== "production" ? invariant(
+      ("production" !== process.env.NODE_ENV ? invariant(
         false,
         '%s tried to unmount. Because of cross-browser quirks it is ' +
         'impossible to unmount some top-level components (eg <html>, <head>, ' +
@@ -24309,7 +24672,9 @@ function createFullPageComponent(tag) {
 
 module.exports = createFullPageComponent;
 
-},{"./ReactClass":45,"./ReactElement":69,"./invariant":147}],124:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ReactClass":46,"./ReactElement":70,"./invariant":148,"_process":12}],125:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24364,7 +24729,7 @@ function getNodeName(markup) {
  */
 function createNodesFromMarkup(markup, handleScript) {
   var node = dummyNode;
-  ("production" !== "production" ? invariant(!!dummyNode, 'createNodesFromMarkup dummy not initialized') : invariant(!!dummyNode));
+  ("production" !== process.env.NODE_ENV ? invariant(!!dummyNode, 'createNodesFromMarkup dummy not initialized') : invariant(!!dummyNode));
   var nodeName = getNodeName(markup);
 
   var wrap = nodeName && getMarkupWrap(nodeName);
@@ -24381,7 +24746,7 @@ function createNodesFromMarkup(markup, handleScript) {
 
   var scripts = node.getElementsByTagName('script');
   if (scripts.length) {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       handleScript,
       'createNodesFromMarkup(...): Unexpected <script> element rendered.'
     ) : invariant(handleScript));
@@ -24397,7 +24762,8 @@ function createNodesFromMarkup(markup, handleScript) {
 
 module.exports = createNodesFromMarkup;
 
-},{"./ExecutionEnvironment":32,"./createArrayFromMixed":122,"./getMarkupWrap":139,"./invariant":147}],125:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ExecutionEnvironment":33,"./createArrayFromMixed":123,"./getMarkupWrap":140,"./invariant":148,"_process":12}],126:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24455,7 +24821,7 @@ function dangerousStyleValue(name, value) {
 
 module.exports = dangerousStyleValue;
 
-},{"./CSSProperty":15}],126:[function(require,module,exports){
+},{"./CSSProperty":16}],127:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24489,7 +24855,8 @@ emptyFunction.thatReturnsArgument = function(arg) { return arg; };
 
 module.exports = emptyFunction;
 
-},{}],127:[function(require,module,exports){
+},{}],128:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24505,13 +24872,14 @@ module.exports = emptyFunction;
 
 var emptyObject = {};
 
-if ("production" !== "production") {
+if ("production" !== process.env.NODE_ENV) {
   Object.freeze(emptyObject);
 }
 
 module.exports = emptyObject;
 
-},{}],128:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"_process":12}],129:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24551,7 +24919,8 @@ function escapeTextContentForBrowser(text) {
 
 module.exports = escapeTextContentForBrowser;
 
-},{}],129:[function(require,module,exports){
+},{}],130:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24581,10 +24950,10 @@ var warning = require("./warning");
  * @return {DOMElement} The root node of this element.
  */
 function findDOMNode(componentOrElement) {
-  if ("production" !== "production") {
+  if ("production" !== process.env.NODE_ENV) {
     var owner = ReactCurrentOwner.current;
     if (owner !== null) {
-      ("production" !== "production" ? warning(
+      ("production" !== process.env.NODE_ENV ? warning(
         owner._warnedAboutRefsInRender,
         '%s is accessing getDOMNode or findDOMNode inside its render(). ' +
         'render() should be a pure function of props and state. It should ' +
@@ -24605,7 +24974,7 @@ function findDOMNode(componentOrElement) {
   if (ReactInstanceMap.has(componentOrElement)) {
     return ReactMount.getNodeFromInstance(componentOrElement);
   }
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     componentOrElement.render == null ||
     typeof componentOrElement.render !== 'function',
     'Component (with keys: %s) contains `render` method ' +
@@ -24613,7 +24982,7 @@ function findDOMNode(componentOrElement) {
     Object.keys(componentOrElement)
   ) : invariant(componentOrElement.render == null ||
   typeof componentOrElement.render !== 'function'));
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     false,
     'Element appears to be neither ReactComponent nor DOMNode (keys: %s)',
     Object.keys(componentOrElement)
@@ -24622,7 +24991,9 @@ function findDOMNode(componentOrElement) {
 
 module.exports = findDOMNode;
 
-},{"./ReactCurrentOwner":51,"./ReactInstanceMap":79,"./ReactMount":82,"./invariant":147,"./isNode":149,"./warning":166}],130:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ReactCurrentOwner":52,"./ReactInstanceMap":80,"./ReactMount":83,"./invariant":148,"./isNode":150,"./warning":167,"_process":12}],131:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24648,8 +25019,8 @@ function flattenSingleChildIntoContext(traverseContext, child, name) {
   // We found a component instance.
   var result = traverseContext;
   var keyUnique = !result.hasOwnProperty(name);
-  if ("production" !== "production") {
-    ("production" !== "production" ? warning(
+  if ("production" !== process.env.NODE_ENV) {
+    ("production" !== process.env.NODE_ENV ? warning(
       keyUnique,
       'flattenChildren(...): Encountered two children with the same key, ' +
       '`%s`. Child keys must be unique; when two children share a key, only ' +
@@ -24678,7 +25049,8 @@ function flattenChildren(children) {
 
 module.exports = flattenChildren;
 
-},{"./traverseAllChildren":165,"./warning":166}],131:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./traverseAllChildren":166,"./warning":167,"_process":12}],132:[function(require,module,exports){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -24707,7 +25079,7 @@ function focusNode(node) {
 
 module.exports = focusNode;
 
-},{}],132:[function(require,module,exports){
+},{}],133:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24738,7 +25110,7 @@ var forEachAccumulated = function(arr, cb, scope) {
 
 module.exports = forEachAccumulated;
 
-},{}],133:[function(require,module,exports){
+},{}],134:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24767,7 +25139,7 @@ function getActiveElement() /*?DOMElement*/ {
 
 module.exports = getActiveElement;
 
-},{}],134:[function(require,module,exports){
+},{}],135:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24819,7 +25191,7 @@ function getEventCharCode(nativeEvent) {
 
 module.exports = getEventCharCode;
 
-},{}],135:[function(require,module,exports){
+},{}],136:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24924,7 +25296,7 @@ function getEventKey(nativeEvent) {
 
 module.exports = getEventKey;
 
-},{"./getEventCharCode":134}],136:[function(require,module,exports){
+},{"./getEventCharCode":135}],137:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -24971,7 +25343,7 @@ function getEventModifierState(nativeEvent) {
 
 module.exports = getEventModifierState;
 
-},{}],137:[function(require,module,exports){
+},{}],138:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25002,7 +25374,7 @@ function getEventTarget(nativeEvent) {
 
 module.exports = getEventTarget;
 
-},{}],138:[function(require,module,exports){
+},{}],139:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25046,7 +25418,8 @@ function getIteratorFn(maybeIterable) {
 
 module.exports = getIteratorFn;
 
-},{}],139:[function(require,module,exports){
+},{}],140:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25078,6 +25451,7 @@ var shouldWrap = {
   // Force wrapping for SVG elements because if they get created inside a <div>,
   // they will be initialized in the wrong namespace (and will not display).
   'circle': true,
+  'clipPath': true,
   'defs': true,
   'ellipse': true,
   'g': true,
@@ -25120,6 +25494,7 @@ var markupWrap = {
   'th': trWrap,
 
   'circle': svgWrap,
+  'clipPath': svgWrap,
   'defs': svgWrap,
   'ellipse': svgWrap,
   'g': svgWrap,
@@ -25143,7 +25518,7 @@ var markupWrap = {
  * @return {?array} Markup wrap configuration, if applicable.
  */
 function getMarkupWrap(nodeName) {
-  ("production" !== "production" ? invariant(!!dummyNode, 'Markup wrapping node not initialized') : invariant(!!dummyNode));
+  ("production" !== process.env.NODE_ENV ? invariant(!!dummyNode, 'Markup wrapping node not initialized') : invariant(!!dummyNode));
   if (!markupWrap.hasOwnProperty(nodeName)) {
     nodeName = '*';
   }
@@ -25161,7 +25536,8 @@ function getMarkupWrap(nodeName) {
 
 module.exports = getMarkupWrap;
 
-},{"./ExecutionEnvironment":32,"./invariant":147}],140:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ExecutionEnvironment":33,"./invariant":148,"_process":12}],141:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25236,7 +25612,7 @@ function getNodeForCharacterOffset(root, offset) {
 
 module.exports = getNodeForCharacterOffset;
 
-},{}],141:[function(require,module,exports){
+},{}],142:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25271,7 +25647,7 @@ function getReactRootElementInContainer(container) {
 
 module.exports = getReactRootElementInContainer;
 
-},{}],142:[function(require,module,exports){
+},{}],143:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25308,7 +25684,7 @@ function getTextContentAccessor() {
 
 module.exports = getTextContentAccessor;
 
-},{"./ExecutionEnvironment":32}],143:[function(require,module,exports){
+},{"./ExecutionEnvironment":33}],144:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25348,7 +25724,7 @@ function getUnboundedScrollPosition(scrollable) {
 
 module.exports = getUnboundedScrollPosition;
 
-},{}],144:[function(require,module,exports){
+},{}],145:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25381,7 +25757,7 @@ function hyphenate(string) {
 
 module.exports = hyphenate;
 
-},{}],145:[function(require,module,exports){
+},{}],146:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25422,7 +25798,8 @@ function hyphenateStyleName(string) {
 
 module.exports = hyphenateStyleName;
 
-},{"./hyphenate":144}],146:[function(require,module,exports){
+},{"./hyphenate":145}],147:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25465,6 +25842,7 @@ assign(
 function isInternalComponentType(type) {
   return (
     typeof type === 'function' &&
+    typeof type.prototype !== 'undefined' &&
     typeof type.prototype.mountComponent === 'function' &&
     typeof type.prototype.receiveComponent === 'function'
   );
@@ -25487,8 +25865,8 @@ function instantiateReactComponent(node, parentCompositeType) {
 
   if (typeof node === 'object') {
     var element = node;
-    if ("production" !== "production") {
-      ("production" !== "production" ? warning(
+    if ("production" !== process.env.NODE_ENV) {
+      ("production" !== process.env.NODE_ENV ? warning(
         element && (typeof element.type === 'function' ||
                     typeof element.type === 'string'),
         'Only functions or strings can be mounted as React components.'
@@ -25513,15 +25891,15 @@ function instantiateReactComponent(node, parentCompositeType) {
   } else if (typeof node === 'string' || typeof node === 'number') {
     instance = ReactNativeComponent.createInstanceForText(node);
   } else {
-    ("production" !== "production" ? invariant(
+    ("production" !== process.env.NODE_ENV ? invariant(
       false,
       'Encountered invalid React node of type %s',
       typeof node
     ) : invariant(false));
   }
 
-  if ("production" !== "production") {
-    ("production" !== "production" ? warning(
+  if ("production" !== process.env.NODE_ENV) {
+    ("production" !== process.env.NODE_ENV ? warning(
       typeof instance.construct === 'function' &&
       typeof instance.mountComponent === 'function' &&
       typeof instance.receiveComponent === 'function' &&
@@ -25539,14 +25917,14 @@ function instantiateReactComponent(node, parentCompositeType) {
   instance._mountIndex = 0;
   instance._mountImage = null;
 
-  if ("production" !== "production") {
+  if ("production" !== process.env.NODE_ENV) {
     instance._isOwnerNecessary = false;
     instance._warnedAboutRefsInRender = false;
   }
 
   // Internal instances should fully constructed at this point, so they should
   // not get any new fields added to them at this point.
-  if ("production" !== "production") {
+  if ("production" !== process.env.NODE_ENV) {
     if (Object.preventExtensions) {
       Object.preventExtensions(instance);
     }
@@ -25557,7 +25935,9 @@ function instantiateReactComponent(node, parentCompositeType) {
 
 module.exports = instantiateReactComponent;
 
-},{"./Object.assign":38,"./ReactCompositeComponent":49,"./ReactEmptyComponent":71,"./ReactNativeComponent":85,"./invariant":147,"./warning":166}],147:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./Object.assign":39,"./ReactCompositeComponent":50,"./ReactEmptyComponent":72,"./ReactNativeComponent":86,"./invariant":148,"./warning":167,"_process":12}],148:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25583,7 +25963,7 @@ module.exports = instantiateReactComponent;
  */
 
 var invariant = function(condition, format, a, b, c, d, e, f) {
-  if ("production" !== "production") {
+  if ("production" !== process.env.NODE_ENV) {
     if (format === undefined) {
       throw new Error('invariant requires an error message argument');
     }
@@ -25612,7 +25992,8 @@ var invariant = function(condition, format, a, b, c, d, e, f) {
 
 module.exports = invariant;
 
-},{}],148:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"_process":12}],149:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25677,7 +26058,7 @@ function isEventSupported(eventNameSuffix, capture) {
 
 module.exports = isEventSupported;
 
-},{"./ExecutionEnvironment":32}],149:[function(require,module,exports){
+},{"./ExecutionEnvironment":33}],150:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25704,7 +26085,7 @@ function isNode(object) {
 
 module.exports = isNode;
 
-},{}],150:[function(require,module,exports){
+},{}],151:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25747,7 +26128,7 @@ function isTextInputElement(elem) {
 
 module.exports = isTextInputElement;
 
-},{}],151:[function(require,module,exports){
+},{}],152:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25772,7 +26153,8 @@ function isTextNode(object) {
 
 module.exports = isTextNode;
 
-},{"./isNode":149}],152:[function(require,module,exports){
+},{"./isNode":150}],153:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25810,7 +26192,7 @@ var invariant = require("./invariant");
 var keyMirror = function(obj) {
   var ret = {};
   var key;
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     obj instanceof Object && !Array.isArray(obj),
     'keyMirror(...): Argument must be an object.'
   ) : invariant(obj instanceof Object && !Array.isArray(obj)));
@@ -25825,7 +26207,8 @@ var keyMirror = function(obj) {
 
 module.exports = keyMirror;
 
-},{"./invariant":147}],153:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./invariant":148,"_process":12}],154:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25861,7 +26244,7 @@ var keyOf = function(oneKeyObj) {
 
 module.exports = keyOf;
 
-},{}],154:[function(require,module,exports){
+},{}],155:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25914,7 +26297,7 @@ function mapObject(object, callback, context) {
 
 module.exports = mapObject;
 
-},{}],155:[function(require,module,exports){
+},{}],156:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25947,7 +26330,8 @@ function memoizeStringOnly(callback) {
 
 module.exports = memoizeStringOnly;
 
-},{}],156:[function(require,module,exports){
+},{}],157:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -25976,7 +26360,7 @@ var invariant = require("./invariant");
  * structure.
  */
 function onlyChild(children) {
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     ReactElement.isValidElement(children),
     'onlyChild must be passed a children with exactly one child.'
   ) : invariant(ReactElement.isValidElement(children)));
@@ -25985,7 +26369,8 @@ function onlyChild(children) {
 
 module.exports = onlyChild;
 
-},{"./ReactElement":69,"./invariant":147}],157:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ReactElement":70,"./invariant":148,"_process":12}],158:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -26013,7 +26398,7 @@ if (ExecutionEnvironment.canUseDOM) {
 
 module.exports = performance || {};
 
-},{"./ExecutionEnvironment":32}],158:[function(require,module,exports){
+},{"./ExecutionEnvironment":33}],159:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -26041,7 +26426,7 @@ var performanceNow = performance.now.bind(performance);
 
 module.exports = performanceNow;
 
-},{"./performance":157}],159:[function(require,module,exports){
+},{"./performance":158}],160:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -26069,7 +26454,7 @@ function quoteAttributeValueForBrowser(value) {
 
 module.exports = quoteAttributeValueForBrowser;
 
-},{"./escapeTextContentForBrowser":128}],160:[function(require,module,exports){
+},{"./escapeTextContentForBrowser":129}],161:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -26158,7 +26543,7 @@ if (ExecutionEnvironment.canUseDOM) {
 
 module.exports = setInnerHTML;
 
-},{"./ExecutionEnvironment":32}],161:[function(require,module,exports){
+},{"./ExecutionEnvironment":33}],162:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -26200,7 +26585,7 @@ if (ExecutionEnvironment.canUseDOM) {
 
 module.exports = setTextContent;
 
-},{"./ExecutionEnvironment":32,"./escapeTextContentForBrowser":128,"./setInnerHTML":160}],162:[function(require,module,exports){
+},{"./ExecutionEnvironment":33,"./escapeTextContentForBrowser":129,"./setInnerHTML":161}],163:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -26244,7 +26629,8 @@ function shallowEqual(objA, objB) {
 
 module.exports = shallowEqual;
 
-},{}],163:[function(require,module,exports){
+},{}],164:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -26286,7 +26672,7 @@ function shouldUpdateReactComponent(prevElement, nextElement) {
         var prevName = null;
         var nextName = null;
         var nextDisplayName = null;
-        if ("production" !== "production") {
+        if ("production" !== process.env.NODE_ENV) {
           if (!ownersMatch) {
             if (prevElement._owner != null &&
                 prevElement._owner.getPublicInstance() != null &&
@@ -26320,7 +26706,7 @@ function shouldUpdateReactComponent(prevElement, nextElement) {
                 if (nextElement._owner != null) {
                   nextElement._owner._isOwnerNecessary = true;
                 }
-                ("production" !== "production" ? warning(
+                ("production" !== process.env.NODE_ENV ? warning(
                   false,
                   '<%s /> is being rendered by both %s and %s using the same ' +
                   'key (%s) in the same place. Currently, this means that ' +
@@ -26346,7 +26732,9 @@ function shouldUpdateReactComponent(prevElement, nextElement) {
 
 module.exports = shouldUpdateReactComponent;
 
-},{"./warning":166}],164:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./warning":167,"_process":12}],165:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -26375,19 +26763,19 @@ function toArray(obj) {
 
   // Some browse builtin objects can report typeof 'function' (e.g. NodeList in
   // old versions of Safari).
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     !Array.isArray(obj) &&
     (typeof obj === 'object' || typeof obj === 'function'),
     'toArray: Array-like object expected'
   ) : invariant(!Array.isArray(obj) &&
   (typeof obj === 'object' || typeof obj === 'function')));
 
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     typeof length === 'number',
     'toArray: Object needs a length property'
   ) : invariant(typeof length === 'number'));
 
-  ("production" !== "production" ? invariant(
+  ("production" !== process.env.NODE_ENV ? invariant(
     length === 0 ||
     (length - 1) in obj,
     'toArray: Object should have keys for indices'
@@ -26416,7 +26804,9 @@ function toArray(obj) {
 
 module.exports = toArray;
 
-},{"./invariant":147}],165:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./invariant":148,"_process":12}],166:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -26580,8 +26970,8 @@ function traverseAllChildrenImpl(
           );
         }
       } else {
-        if ("production" !== "production") {
-          ("production" !== "production" ? warning(
+        if ("production" !== process.env.NODE_ENV) {
+          ("production" !== process.env.NODE_ENV ? warning(
             didWarnAboutMaps,
             'Using Maps as children is not yet fully supported. It is an ' +
             'experimental feature that might be removed. Convert it to a ' +
@@ -26611,7 +27001,7 @@ function traverseAllChildrenImpl(
         }
       }
     } else if (type === 'object') {
-      ("production" !== "production" ? invariant(
+      ("production" !== process.env.NODE_ENV ? invariant(
         children.nodeType !== 1,
         'traverseAllChildren(...): Encountered an invalid child; DOM ' +
         'elements are not valid children of React components.'
@@ -26667,7 +27057,9 @@ function traverseAllChildren(children, callback, traverseContext) {
 
 module.exports = traverseAllChildren;
 
-},{"./ReactElement":69,"./ReactFragment":75,"./ReactInstanceHandles":78,"./getIteratorFn":138,"./invariant":147,"./warning":166}],166:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./ReactElement":70,"./ReactFragment":76,"./ReactInstanceHandles":79,"./getIteratorFn":139,"./invariant":148,"./warning":167,"_process":12}],167:[function(require,module,exports){
+(function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -26692,7 +27084,7 @@ var emptyFunction = require("./emptyFunction");
 
 var warning = emptyFunction;
 
-if ("production" !== "production") {
+if ("production" !== process.env.NODE_ENV) {
   warning = function(condition, format ) {for (var args=[],$__0=2,$__1=arguments.length;$__0<$__1;$__0++) args.push(arguments[$__0]);
     if (format === undefined) {
       throw new Error(
@@ -26728,10 +27120,11 @@ if ("production" !== "production") {
 
 module.exports = warning;
 
-},{"./emptyFunction":126}],167:[function(require,module,exports){
+}).call(this,require('_process'))
+},{"./emptyFunction":127,"_process":12}],168:[function(require,module,exports){
 module.exports = require('./lib/React');
 
-},{"./lib/React":40}],168:[function(require,module,exports){
+},{"./lib/React":41}],169:[function(require,module,exports){
 //     Underscore.js 1.4.4
 //     http://underscorejs.org
 //     (c) 2009-2013 Jeremy Ashkenas, DocumentCloud Inc.
@@ -27959,31 +28352,6 @@ module.exports = require('./lib/React');
 
 }).call(this);
 
-},{}],169:[function(require,module,exports){
-if (typeof Object.create === 'function') {
-  // implementation from standard node.js 'util' module
-  module.exports = function inherits(ctor, superCtor) {
-    ctor.super_ = superCtor
-    ctor.prototype = Object.create(superCtor.prototype, {
-      constructor: {
-        value: ctor,
-        enumerable: false,
-        writable: true,
-        configurable: true
-      }
-    });
-  };
-} else {
-  // old school shim for old browsers
-  module.exports = function inherits(ctor, superCtor) {
-    ctor.super_ = superCtor
-    var TempCtor = function () {}
-    TempCtor.prototype = superCtor.prototype
-    ctor.prototype = new TempCtor()
-    ctor.prototype.constructor = ctor
-  }
-}
-
 },{}],170:[function(require,module,exports){
 module.exports = function isBuffer(arg) {
   return arg && typeof arg === 'object'
@@ -28581,7 +28949,7 @@ function hasOwnProperty(obj, prop) {
 }
 
 }).call(this,require('_process'),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"./support/isBuffer":170,"_process":11,"inherits":169}],172:[function(require,module,exports){
+},{"./support/isBuffer":170,"_process":12,"inherits":8}],172:[function(require,module,exports){
 "use strict";
 
 var AppConstants = require('../constants/AppConstants');
@@ -28793,10 +29161,10 @@ var insertAlternateLinks = function(pageId) {
   // and optionally a region (in ISO 3166-1 Alpha 2 format) of an alternate URL
 
   var altLinks = LocaleStore.getSupportedLocales().map(function(langCode) {
-    var url = "https://learngitbranching.js.org/?locale=" + langCode;
+    var url = "https://toofff.github.io/learnGitBranching/?locale=" + langCode;
     return '<link rel="alternate" hreflang="'+langCode+'" href="' + url +'" />';
   });
-  var defaultUrl = "https://learngitbranching.js.org/?locale=" + LocaleStore.getDefaultLocale();
+  var defaultUrl = "https://toofff.github.io/learnGitBranching/?locale=" + LocaleStore.getDefaultLocale();
   altLinks.push('<link rel="alternate" hreflang="x-default" href="' + defaultUrl +'" />');
   $('head').prepend(altLinks);
 
@@ -29050,7 +29418,7 @@ exports.getLevelDropdown = function() {
 
 exports.init = init;
 
-},{"../actions/LocaleActions":175,"../intl":191,"../models/collections":199,"../react_views/CommandHistoryView.jsx":201,"../react_views/MainHelperBarView.jsx":207,"../sandbox/":209,"../stores/LocaleStore":213,"../util":220,"../util/eventBaton":219,"../views":230,"../views/commandViews":228,"../views/levelDropdownView":231,"backbone":1,"events":3,"react":167}],177:[function(require,module,exports){
+},{"../actions/LocaleActions":175,"../intl":191,"../models/collections":199,"../react_views/CommandHistoryView.jsx":201,"../react_views/MainHelperBarView.jsx":207,"../sandbox/":209,"../stores/LocaleStore":213,"../util":220,"../util/eventBaton":219,"../views":230,"../views/commandViews":228,"../views/levelDropdownView":231,"backbone":1,"events":7,"react":168}],177:[function(require,module,exports){
 var intl = require('../intl');
 
 var Errors = require('../util/errors');
@@ -29365,6 +29733,16 @@ exports.dialog = {
       ]
     }
   }],
+  'gl': [{
+    type: 'ModalAlert',
+    options: {
+      markdowns: [
+        '## ¿Queres ver a solución?',
+        '',
+        'Seguro que podes, ¡inténtao unha vez máis!'
+      ]
+    }
+  }],
   'fr_FR': [{
     type: 'ModalAlert',
     options: {
@@ -29527,6 +29905,25 @@ exports.dialog = {
         '  * Dê um nome com ```define name```',
         '  * Opcionalmente, defina uma mensagem inicial com ```edit dialog```',
         '  * Digite o comando ```finish``` para obter seu nível em formato JSON!'
+      ]
+    }
+  }],
+  'gl': [{
+    type: 'ModalAlert',
+    options: {
+      markdowns: [
+        '## Benvido ó constructor de niveis!',
+        '',
+        'Estes son os pasos principais:',
+        '',
+        '  * Prepara o eido inicial usando comandos de Git',
+        '  * Define a árbore inicial con ```define start```',
+        '  * Inserta a secuencia de comandos de git que representan a mellor solución',
+        '  * Define a árbore obxectivo con ```define goal```. O obxectivo tamén determina a solución',
+        '  * Opcionalmente, define axudas con ```define hint```',
+        '  * Dalle un nome con ```define name```',
+        '  * Opcionalmente, define unha mensaxe inicial con ```edit dialog```',
+        '  * Escribe o comando ```finish``` para obter seu nivel en formato JSON!'
       ]
     }
   }],
@@ -29710,6 +30107,17 @@ exports.dialog = {
       ]
     }
   }],
+  'gl': [{
+    type: 'ModalAlert',
+    options: {
+      markdowns: [
+        '## Bo traballo!!',
+        '',
+        'Resolviches o nivel empregando *{numCommands}* comandos; ',
+        'a nosa mellor solución é en {best}.'
+      ]
+    }
+  }],
   'fr_FR': [{
     type: 'ModalAlert',
     options: {
@@ -29776,8 +30184,7 @@ exports.dialog = {
         'You can see all the commands available with `show commands` at the terminal.',
         '',
         'PS: Want to go straight to a sandbox next time?',
-        'Try out ',
-        '[this special link](https://pcottle.github.io/learnGitBranching/?NODEMO)'
+        'Try out '
       ]
     }
   }],
@@ -29790,17 +30197,7 @@ exports.dialog = {
         'Esta aplicación está diseñada para ayudar a los principantes ',
         'a manejar los poderosos conceptos que hay detrás del trabajo ',
         'con ramas (branches) en Git. Esperamos que disfrutes la aplicación ',
-        'y tal vez incluso ¡que aprendas algo! ',
-        '',
-        '# ¡Demo!',
-        '',
-        'Si no viste la demo, mirala en esta dirección:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?demo](https://pcottle.github.io/learnGitBranching/?demo)',
-        '',
-        '¿Harto de este mensaje? Agregale `?NODEMO` a la URL para dejar de verlo, como en este link:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?NODEMO](?NODEMO)'
+        'y tal vez incluso ¡que aprendas algo! '
       ]
     }
   }, {
@@ -29846,17 +30243,7 @@ exports.dialog = {
         'Este aplicativo foi desenvolvido para ajudar os iniciantes a ',
         'aprender os poderosos conceitos por trás do branching com ',
         'o git. Esperamos que você goste deste aplicativo e talvez ',
-        'até aprenda alguma coisa!',
-        '',
-        '# Demo!',
-        '',
-        'Se você ainda não viu o demo, veja aqui:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?demo](https://pcottle.github.io/learnGitBranching/?demo)',
-        '',
-        'Farto desta mensagem? Acrescente `?NODEMO` ao endereço para se livrar dela, como no link abaixo:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?NODEMO](?NODEMO)'
+        'até aprenda alguma coisa!'
       ]
     }
   }, {
@@ -29893,23 +30280,59 @@ exports.dialog = {
       ]
     }
   }],
+  'gl': [{
+    type: 'ModalAlert',
+    options: {
+      markdowns: [
+        '## Benvido a Learn Git Branching!',
+        '',
+        'Esta aplicación foi desenvolvida para axudar os iniciados en git a ',
+        'aprender os poderosos conceptos que hai por detrás do branching con ',
+        ' git. Agardamos que disfrutes desta aplicación, e tal vez, ',
+        'ata aprendas algunha cousa!'
+      ]
+    }
+  }, {
+    type: 'ModalAlert',
+    options: {
+      markdowns: [
+        '## Comandos de git',
+        '',
+        'Tes a túa disposición unha caixa de área con unha variedade de comandos de git:',
+        '',
+        ' * commit',
+        ' * branch',
+        ' * checkout',
+        ' * cherry-pick',
+        ' * reset',
+        ' * revert',
+        ' * rebase',
+        ' * merge'
+      ]
+    }
+  }, {
+    type: 'ModalAlert',
+    options: {
+      markdowns: [
+        '## Compartir e importar!',
+        '',
+        'Comparte árbores cos seus amigas con `export tree` e `import tree`',
+        '',
+        '¿Tes un enlace moi grande para compartir? Intenta construír un nivel con `build level` ou importe o nivel dun amigo con `import level`',
+        '',
+        'Para ver tódolos comandos, usa `show commands`. Hai algunha xoia como `undo` e `reset`',
+        '',
+        'Por agora, imos comezar cos `levels`...'
+      ]
+    }
+  }],
   'de_DE': [{
     type: 'ModalAlert',
     options: {
       markdowns: [
         '## Willkommen bei Learn Git Branching!',
         '',
-        'Der Sinn dieser Anwendung ist, die umfangreichen und komplexen Zusammenhänge der Prozesse, die bei der Arbeit mit Git ablaufen, zu verdeutlichen. Ich hoffe du hast Spaß dabei und lernst vielleicht sogar etwas!',
-        '',
-        '# Demo!',
-        '',
-        'Falls du die Demonstration noch nicht gesehen hast, schau sie dir hier an:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?demo](https://pcottle.github.io/learnGitBranching/?demo)',
-        '',
-        'Genervt von diesem Fenster? Häng `?NODEMO` an die URL um es los zu werden, so wie hier:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?NODEMO](?NODEMO)'
+        'Der Sinn dieser Anwendung ist, die umfangreichen und komplexen Zusammenhänge der Prozesse, die bei der Arbeit mit Git ablaufen, zu verdeutlichen. Ich hoffe du hast Spaß dabei und lernst vielleicht sogar etwas!'
       ]
     }
   }, {
@@ -29955,17 +30378,7 @@ exports.dialog = {
         'gitのパワフルなブランチ機能のコンセプトが ',
         '学びやすくなるようにこのアプリケーションを作りました。 ',
         'このアプリケーションを楽しんで使って頂いて、 ',
-        '何かを学習して頂けたなら嬉しいです。',
-        '',
-        '# とりあえず触ってみたい方へ：',
-        '',
-        '簡単なデモを用意してあるので、もしよければこちらもご覧ください：',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?demo](https://pcottle.github.io/learnGitBranching/?demo&locale=ja)',
-        '',
-        'このダイアログ自体を省略するには、以下のようにURLの末尾にクエリストリング`?NODEMO`を付加してアクセスしてください。',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?NODEMO](https://pcottle.github.io/learnGitBranching/?NODEMO&locale=ja)'
+        '何かを学習して頂けたなら嬉しいです。'
       ]
     }
   }, {
@@ -30000,9 +30413,7 @@ exports.dialog = {
         '',
         'それから、不自然な記号が出てきたときは顔を左方向に傾けてみるといいかもしれません :P（ペロッ）',
         '',
-        'それでは教材の選択画面に進んでみることにします。',
-        '',
-        '（なお、日本語版製作者のフォークサイトは[こちら](https://remore.github.io/learnGitBranching-ja/)になります。）'
+        'それでは教材の選択画面に進んでみることにします。'
       ]
     }
   }],
@@ -30034,17 +30445,7 @@ exports.dialog = {
         '## 歡迎光臨 Learn Git Branching!',
         '',
         '本應用旨在幫助初學者領會 git 分支背後的強大概念。',
-        '希望你能喜歡這個應用，並學到知識！',
-        '',
-        '# 演示！',
-        '',
-        '如果你還沒看過演示，請到此查看：',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?demo](https://pcottle.github.io/learnGitBranching/?demo)',
-        '',
-        '厭煩這個對話視窗嗎？在 URL 後頭加上 `?NODEMO` 就看不到它了，也可以直接點下邊這個連結：',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?NODEMO](https://pcottle.github.io/learnGitBranching/?NODEMO)'
+        '希望你能喜歡這個應用，並學到知識！'
       ]
     }
   }, {
@@ -30087,12 +30488,7 @@ exports.dialog = {
         '',
         '이 애플리케이션은 git을 쓸 때 필요한 브랜치에 대한 개념을',
         '탄탄히 잡게끔 도와드리기 위해 만들었습니다. 재밌게 사용해주시기를',
-        '바라며, 무언가를 배워가신다면 더 기쁘겠습니다!',
-        '',
-        '이 애플리케이션은 [Peter Cottle](https://github.io/pcottle)님의 [LearnGitBranching](https://pcottle.github.io/learnGitBranching/)를 번역한 것입니다.',
-        '아래 데모를 먼저 보셔도 좋습니다.',
-        '',
-        '<https://pcottle.github.io/learnGitBranching/?demo&locale=ko>'
+        '바라며, 무언가를 배워가신다면 더 기쁘겠습니다!'
       ]
     }
   }, {
@@ -30136,17 +30532,7 @@ exports.dialog = {
         'Cette application a été conçue pour aider les débutants à saisir ',
         'les puissants concepts derrière les branches en travaillant ',
         'avec git. Nous espérons que vous apprécierez cette application et ',
-        'que vous apprendrez peut-être quelque chose d\'intéressant !',
-        '',
-        '# Démo !',
-        '',
-        'Si vous n\'avez pas vu la démo, vous pouvez le faire là :',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?demo](https://pcottle.github.io/learnGitBranching/?demo)',
-        '',
-        'Agacé par ce dialogue ? Ajoutez `?NODEMO` à l\'URL pour le supprimer, en lien ci-dessous pour votre commodité :',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?NODEMO](?NODEMO)'
+        'que vous apprendrez peut-être quelque chose d\'intéressant !'
       ]
     }
   }, {
@@ -30192,17 +30578,7 @@ exports.dialog = {
         'Это приложение создано, чтобы помочь новичкам постичь ',
         'мощные возможности ветвления и работы ',
         'с git. Мы надеемся, что вам понравится эта игра ',
-        'и может вы что-то усвоите!',
-        '',
-        '# Демо!',
-        '',
-        'Если ты не видел демонстрацию – посмотри её тут:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?demo](https://pcottle.github.io/learnGitBranching/?demo)',
-        '',
-        'Достало это сообщение? Добавь `?NODEMO` к адресу и навсегда забудь о нём, ниже ссылка для удобства:',
-        '',
-        '[https://pcottle.github.io/learnGitBranching/?NODEMO](?NODEMO)'
+        'и может вы что-то усвоите!'
       ]
     }
   }, {
@@ -30249,15 +30625,7 @@ exports.dialog = {
         '"Learn Git Branching" \u2014 це найбільш візуальний та інтерактивний спосіб вивчення Git в Інтернеті. ',
         'Ти зможеш проходити захопливі рівні, дивитися ',
         'покрокові інструкції з використання потужних функцій Git, навіть трохи ',
-        'розважитись в процесі навчання.',
-        '',
-        'Після цього діалогу побачиш список доступних рівнів. Якщо ти новачок, ',
-        'просто почни з першого рівня. Якщо вже знаєш основи Git, ',
-        'спробуй більш складні рівні в кінці.',
-        '',
-        'P.S. Хочеш перейти одразу до пісочниці наступного разу?',
-        'Спробуй ',
-        '[це спеціальне посилання.](https://pcottle.github.io/learnGitBranching/?NODEMO)'
+        'розважитись в процесі навчання.'
       ]
     }
   }]
@@ -31235,7 +31603,7 @@ GitShim.prototype.afterGitCommandProcessed = function(command, deferred) {
 exports.GitShim = GitShim;
 
 
-},{"../app":176,"../views/multiView":232,"q":12}],186:[function(require,module,exports){
+},{"../app":176,"../views/multiView":232,"q":13}],186:[function(require,module,exports){
 var Backbone = require('backbone');
 var Q = require('q');
 
@@ -31379,7 +31747,7 @@ exports.HeadlessGit = HeadlessGit;
 exports.getTreeQuick = getTreeQuick;
 
 
-},{"../git":187,"../graph/treeCompare":189,"../models/collections":199,"../models/commandModel":200,"../util":220,"../util/eventBaton":219,"../util/mock":223,"../visuals":236,"../visuals/animation/animationFactory":234,"backbone":1,"q":12}],187:[function(require,module,exports){
+},{"../git":187,"../graph/treeCompare":189,"../models/collections":199,"../models/commandModel":200,"../util":220,"../util/eventBaton":219,"../util/mock":223,"../visuals":236,"../visuals/animation/animationFactory":234,"backbone":1,"q":13}],187:[function(require,module,exports){
 var Backbone = require('backbone');
 var Q = require('q');
 
@@ -34467,7 +34835,7 @@ exports.Branch = Branch;
 exports.Tag = Tag;
 exports.Ref = Ref;
 
-},{"../app":176,"../commands":177,"../graph":188,"../graph/treeCompare":189,"../intl":191,"../util/errors":217,"../views/rebaseView":233,"../visuals/animation":235,"../visuals/animation/animationFactory":234,"backbone":1,"q":12}],188:[function(require,module,exports){
+},{"../app":176,"../commands":177,"../graph":188,"../graph/treeCompare":189,"../intl":191,"../util/errors":217,"../views/rebaseView":233,"../visuals/animation":235,"../visuals/animation/animationFactory":234,"backbone":1,"q":13}],188:[function(require,module,exports){
 function invariant(truthy, reason) {
   if (!truthy) {
     throw new Error(reason);
@@ -35080,7 +35448,7 @@ TreeCompare.compareTrees = function(treeA, treeB) {
 
 module.exports = TreeCompare;
 
-},{"underscore":168}],190:[function(require,module,exports){
+},{"underscore":169}],190:[function(require,module,exports){
 var sys = require('sys');
 var util = require('../util');
 var child_process = require('child_process');
@@ -35136,7 +35504,7 @@ if (!util.isBrowser()) {
 }
 
 
-},{"../intl/strings":192,"../util":220,"child_process":7,"sys":171}],191:[function(require,module,exports){
+},{"../intl/strings":192,"../util":220,"child_process":6,"sys":171}],191:[function(require,module,exports){
 var LocaleStore = require('../stores/LocaleStore');
 
 var _ = require('underscore');
@@ -35254,7 +35622,7 @@ exports.getStartDialog = function(level) {
   return startCopy;
 };
 
-},{"../intl/strings":192,"../stores/LocaleStore":213,"underscore":168}],192:[function(require,module,exports){
+},{"../intl/strings":192,"../stores/LocaleStore":213,"underscore":169}],192:[function(require,module,exports){
 exports.strings = {
   ///////////////////////////////////////////////////////////////////////////
   'finish-dialog-finished': {
@@ -35267,6 +35635,7 @@ exports.strings = {
     'es_AR': '¡Ea! Terminaste el último nivel, ¡genial!',
     'es_ES': '¡Felicitaciones! Terminaste el último nivel!',
     'pt_BR': 'Uia! Você terminou o último nível, massa!',
+    'gl'   : '¡Yeeeha! Remataches o derradeiro nivel, ¡a tope!',
     'fr_FR': 'Félicitations, vous avez réussi le dernier niveau !',
     'ru_RU': 'Вау! Вы прошли последний уровень, отлично!',
     'uk': 'Вау! Ти пройшов останній рівень, круто!',
@@ -35283,6 +35652,7 @@ exports.strings = {
     'es_AR': '¿Querés seguir con *"{nextLevel}"*, el próximo nivel?',
     'es_ES': '¿Quieres seguir al nivel *"{nextLevel}"*, el próximo nivel?',
     'pt_BR': 'Você gostaria de ir para o próximo nível: *"{nextLevel}"*?',
+    'gl'   : '¿Gustaríache ir o seguinte nivel: *"{nextLevel}"*?',
     'fr_FR': 'Voulez-vous passer à *"{nextLevel}"*, le prochain niveau ?',
     'ru_RU': 'Хотите перейти на следующий уровень: *"{nextLevel}"*?',
     'uk': 'Хочеш перейти на наступний рівень -- *"{nextLevel}"*?',
@@ -35299,6 +35669,7 @@ exports.strings = {
     'zh_TW': '太強了，您的答案符合我們的預期甚至更好！',
     'es_AR': '¡Fabuloso! Igualaste o superaste nuestra solución.',
     'es_ES': '¡Fabuloso! Igualaste o superaste nuestra solución.',
+    'gl'   : '¡Fabuloso! Fixécholo igual ou mellor ca nosa solución.',
     'fr_FR': 'Fabuleux ! Votre solution a égalé ou surpassé notre solution.',
     'ru_RU': 'Отлично! Ваше решение соответствует или превосходит наше.',
     'uk': 'Чудово! Твій розв’язок на рівні або кращий від нашого.',
@@ -35315,6 +35686,7 @@ exports.strings = {
     'es_AR': 'Fijate si podés bajarlo a usar sólo {best} comandos :D',
     'es_ES': 'Trata de usar sólo {best} comandos :D',
     'pt_BR': 'Veja se consegue reduzir para somente {best} :D',
+    'gl'   : 'Mira se consigues reducir a solo {best} :D',
     'fr_FR': 'Voyons si vous pouvez descendre à {best} :D',
     'ru_RU': 'Попробуйте, может вы сможете уложиться в {best} : D',
     'uk': 'Спробуй, можливо ти зможеш вкластися в {best} кроків :D',
@@ -35329,6 +35701,7 @@ exports.strings = {
     'es_AR': '¡Cuidado! Mercurial hace garbage collection agresivamente y necesita eliminar tu árbol',
     'es_ES': '¡Cuidado! Mercurial hace la colección de basura agresivamente (para administrar memoria) y necesita podar tu árbol.',
     'pt_BR': 'Cuidado! O Mercurial faz coleção de lixo agressiva e precisa prunar sua árvore',
+    'gl'   : '¡Coidado! Mercurial fai que recolección de lixo agresivamente (para limpar memoria) e precisa podar a túa árbore.',
     'fr_FR': 'Attention, Mercurial supprime de façon agressive et nécessite un prune du repository',
     'de_DE': 'Achtung! Mercurial macht aggressive Garbage Collection und muss daher deinen Baum reduzieren',
     'ru_RU': 'Внимание! Mercurial использует агрессивный сборщик мусора и обрезает ваше дерево',
@@ -35344,6 +35717,7 @@ exports.strings = {
     'es_AR': 'La opción -A no es necesaria para esta aplicación, simplemente hacé commit',
     'es_ES': 'La opción -A no se necesita para este aplicación, sólo hace un commit!',
     'pt_BR': 'A opção -A não é necessária para este aplicativo, simplesmente faça commit',
+    'gl'   : 'A opción -A non se necesita para este aplicativo, ¡fai só un commit!',
     'de_DE': 'Die Option -A wird in dieser Anwendung nicht benötigt, committe einfach!',
     'fr_FR': 'L\'option -A n\'est pas nécessaire pour cette application, simplement commiter',
     'ru_RU': 'Опция -A не требуется для этого приложения, просто сделайте коммит.',
@@ -35359,6 +35733,7 @@ exports.strings = {
     'es_AR': 'No hay un comando status para esta aplicación, dado que no hay archivos que indexar. Probá hg summary, en cambio',
     'es_ES': 'No hay un comando status para esta aplicación, porque que no hay archivos que indexar. Prueba el comando hg summary, en cambio',
     'pt_BR': 'Não existe um comando status para este aplicativo, já que não há staging de arquivos. Tente hg summary',
+    'gl'   : 'Non hai un comando status para esta aplicación, xa que non hai ficheiros que indexar. Proba hg summary',
     'fr_FR': 'Il n\'y a pas de commande status pour cette application, car il n\'y a pas de fichier stagé. Essayez hg summary à la place.',
     'de_DE': 'Es gibt keinen Befehl status in dieser Anwendung, da es kein Staging von Dateien gibt. Probier stattdessen hg summary',
     'ru_RU': 'Команда status не поддерживается в этом приложении, так как здесь нет файлов. Попробуйте выполнить hg summary',
@@ -35374,6 +35749,7 @@ exports.strings = {
     'es_AR': '¡Necesito la opción {opcion} para ese comando!',
     'es_ES': '¡Necesito la opción {opcion} para ese comando!',
     'pt_BR': 'Eu preciso da opção {option} para esse comando!',
+    'gl'   : 'Preciso da opción {option} para ese comando!',
     'fr_FR': 'J\'ai besoin de l\'option {option} pour cette commande',
     'de_DE': 'Ich benötige die Option {option} für diesen Befehl!',
     'ru_RU': 'Для этой команды требуется опция {option}',
@@ -35389,6 +35765,7 @@ exports.strings = {
     'es_AR': 'hg log sin el parámetro -f no está soportado, usá -f',
     'es_ES': 'Actualmente hg log sin -f no es compatible con esta aplicación. Usa -f.',
     'pt_BR': 'hg log sem -f atualmente não é suportado, use -f',
+    'gl'   : 'hg log sen -f actulamente non é soportado, usa -f',
     'fr_FR': 'hg log sans -f n\'est pas supporté',
     'de_DE': 'hg log ohne -f wird aktuell nicht unterstützt, benutze bitte -f',
     'ru_RU': 'hg log без опции -f в настоящий момент не поддерживается, используйте -f',
@@ -35405,6 +35782,7 @@ exports.strings = {
     'es_AR': '¡Detached HEAD!',
     'es_ES': '¡HEAD separado! (Detached HEAD).',
     'pt_BR': 'Detached HEAD!',
+    'gl'   : '¡Detached HEAD!',
     'fr_FR': 'head détaché !',
     'ru_RU': 'Отделенный HEAD',
     'uk': 'Відокремлений HEAD',
@@ -35420,6 +35798,7 @@ exports.strings = {
     'es_AR': 'En la rama {branch}',
     'es_ES': 'En la rama {branch}',
     'pt_BR': 'No ramo {branch}',
+    'gl'   : 'Non na rama {branch}',
     'fr_FR': 'Sur la branche {branch}',
     'ru_RU': 'В ветке {branch}',
     'uk': 'В гілці {branch}',
@@ -35435,6 +35814,7 @@ exports.strings = {
     'es_AR': '¡Listo para commitear! (como siempre en esta demo ;-) )',
     'es_ES': '¡Listo para hacer un commit (como siempre en esta demo)!',
     'pt_BR': 'Pronto para commitar! (como sempre neste demo ;-) )',
+    'gl'   : '¡Praparado para facer un commit (como sempre nesta demo ;-) )!',
     'fr_FR': 'Prêt à commit ! (comme toujours dans cette démo)',
     'ru_RU': 'Готово к коммиту! (как и всегда в этом демо)',
     'uk': 'Готово до коміту! (як завжди в цьому демо)',
@@ -35451,6 +35831,7 @@ exports.strings = {
     'es_AR': 'Otro commit más, y van...',
     'es_ES': 'Hagamos un commit. Atlanta, Georgia! Escucha WHATUPRG también.',
     'pt_BR': 'Commitando.. Vai Timão!',
+    'gl'   : 'Mesturando.. ¡Alá imos!',
     'fr_FR': 'Commit rapide. NoMaN Sux!',
     'ru_RU': 'Быстрый коммит. А надо!',
     'uk': 'Швидкий коміт. Динамо!',
@@ -35464,6 +35845,7 @@ exports.strings = {
     'es_AR': 'Estás en la versión más reciente',
     'es_ES': 'Ya actualizado con la versión más reciente.',
     'pt_BR': 'Já estamos na versão mais recente!',
+    'gl'   : 'Xa estamos actualizados ca versión máis recente',
     'zh_TW': '已經是最新的了',
     'zh_CN': '已经是最新的了',
     'ru_RU': 'Уже обновлено!',
@@ -35479,6 +35861,7 @@ exports.strings = {
     'es_AR': 'Tu rama origin está desincronizada con la rama remota, por lo que no se puede hacer el fetch',
     'es_ES': 'Tu rama origin no está sicronizada con la rama remota, así que un fetch no se puede realizar.',
     'pt_BR': 'O fetch não pode ser realizado pois o ramo de origem está fora de sincronia com o ramo remoto',
+    'gl'   : 'O fetch non pode ser realizado xa que a rama de orixe non está sincronizada  ca rama remota',
     'fr_FR': 'Votre branche origin n\'est plus synchronisée avec la branche distante et fetch ne peut pas être appliqué. Essayez avec l\'option --force',
     'ru_RU': 'Ваша origin ветка не синхронизирована с удаленной веткой, невозможно выполнить fetch',
     'uk': 'Твоя гілка origin не синхронізована з віддаленою гілкою, неможливо виконати fetch',
@@ -35491,8 +35874,9 @@ exports.strings = {
     'zh_TW': '遠端倉庫與你的本地倉庫產生了分歧，故此上傳操作無法通過簡單地快進實現（因此你的 push 被拒絕了）。請 pull 下來遠端裡最新的更改，與本地合併之後再試一次。你可以通過 git pull 或 git pull --rebase 實現。',
     'de_DE': 'Das entfernte Repository weicht von deinem lokalen Repository ab, daher können deine Änderungen nicht mit einem einfachen fast forward hochgeladen werden (und daher ist dein push abgelehnt worden). Bitte pull erst die neuen Änderungen in das lokale Repository, integriere sie in den Branch und versuch es nochmal. Das kannst du mit git pull oder git pull --rebase machen',
     'es_AR': 'El repositorio remoto divergió de tu repositorio local, por lo que subir tus cambios no es un simple fast forward (y por eso se rechazó tu push). Por favor, hacé pull de los nuevos cambios en el repositorio remoto, incorporalos a esta rama y probá de nuevo. Podés hacerlo con git pull o git pull --rebase',
-    'es_ES': 'El depósito remoto se ha desviado del depósito local. Subir cambios no es un avance rápido sencillo (por eso fue rechazado tu push). Por favor haz pull para descaragar los cambios en el depósito remoto para que los incorpores en la rama actual. Los cambios se pueden hacer pull con el comando "git pull" o "git pull--rebase"',
+    'es_ES': 'El depósito remoto se ha desviado del depósito local. Subir cambios no es un avance rápido sencillo (por eso fue rechazado tu push). Por favor haz pull para descaragar los cambios en el depósito remoto para que los incorpores en la rama actual. Los cambios se pueden hacer pull con el comando "git pull" o "git pull --rebase"',
     'pt_BR': 'O repositório remoto divergiu do repositório local, então enviar suas mudanças não é um simples fast forward (e por isso seu push foi rejeitado). Por favor, faça pull das novas mudanças do repositório remoto, incorpore-os a este ramo, e tente novamente. Você pode fazê-lo com git pull ou git pull --rebase',
+    'gl'   : 'O repositorio remoto diverxe do teu repositorio local. Subir os cambios non é un fast-forward (avance rápido) e por iso foi rechazado o teu push. Por favor, fai un pull dos novos cambios do repositorio remoto e inclúeos na túa rama actual. Os cambios pódense facer co comando "git pull" ou "git pull --rebase"',
     'fr_FR': 'Le dépôt distant a divergé de votre référentiel local, donc l\'envoi de vos modifications n\'est pas en simple avance rapide (et donc votre envoi a été rejeté). Veuillez récupérer les nouveaux changements depuis le dépôt distant, les intégrer dans cette branche, et essayez à nouveau. Vous pouvez le faire avec git pull ou git pull --rebase',
     'ru_RU': 'Удаленный репозиторий разошелся с вашим локальным репозиторием, поэтому выгрузка ваших изменений не может быть в режиме fast forward (и следовательно ваш push будет отклонён). Пожалуйста, удалите изменения в удаленном репозитории которые, объедините их в эту ветку и попробуйте еще раз. Вы можете сделать это с помощью git pull или git pull --rebase',
     'uk': 'Віддалений репозиторій розбігся з твоїм локальним репозиторієм, тому відвантаження твоїх змін не є простим fast forward (і тому твій push був відхилений). Будь-ласка, витягни зміни з віддаленого репозиторію, включи їх в цю гілку, й спробуй ще. Ти можеш зробити це за допомогою git pull чи git pull --rebase',
@@ -35507,6 +35891,7 @@ exports.strings = {
     'es_AR': 'No podés ejecutar ese comando en una rama remota',
     'es_ES': 'No puedes ejecutar ese comando en una rama remota',
     'pt_BR': 'Você não pode executar esse comando em um ramo remoto',
+    'gl'   : 'Non podes executar ese comando nunha rama remota',
     'fr_FR': 'Vous ne pouvez exécuter cette commande sur une branche distante',
     'ru_RU': 'Вы не можете выполнить эту команду на удаленной ветке',
     'uk': 'Ти не можеш виконати цю команду на віддаленій гілці',
@@ -35521,6 +35906,7 @@ exports.strings = {
     'es_AR': 'Necesitás un origen para ese comando',
     'es_ES': 'Se requiere un origen para ese comando.',
     'pt_BR': 'É necessário informar uma origem para esse comando',
+    'gl'   : 'É necesario informar unha orixe para ese comando',
     'fr_FR': 'Une origine est requise pour cette commande',
     'ru_RU': 'Origin требуется для этой команды',
     'uk': 'Для цієї команди потрібний origin',
@@ -35535,6 +35921,7 @@ exports.strings = {
     'es_AR': '¡Ya existe el origen! No podés crear uno nuevo',
     'es_ES': '¡Ya existe un origen! No puedes crearlo de nuevo.',
     'pt_BR': 'A origem já existe! Você não pode criar uma nova',
+    'gl'   : 'A orixe xa existe! Non podes crear unha nova',
     'fr_FR': 'Une origine existe déjà ! Vous ne pouvez pas en créer une nouvelle',
     'ru_RU': 'Origin уже существует! Невозможно создать еще один',
     'uk': 'Origin вже існує! Неможливо створити ще один',
@@ -35551,6 +35938,7 @@ exports.strings = {
     'es_AR': 'No podés borrar la rama master, la rama en la que estás, o cosas que no son ramas',
     'es_ES': 'No puedes eliminar la rama master, la rama en que estás, o cosas que no son ramas.',
     'pt_BR': 'Você não pode apagar o ramo master, nem o ramo em que você está, nem coisas que não sejam ramos',
+    'gl'   : 'Non podes borrala rama master, nin a rama na que ti estás, nin cousas que non sexan ramas',
     'fr_FR': 'Vous ne pouvez supprimer la branche master, la branche sur laquelle vous êtes, ou ce qui n\'est pas une branche',
     'ru_RU' : 'Невозможно удалить ветку master, ветку на которой вы сейчас и то что не является веткой',
     'uk': 'Неможливо видалити гілку master, гілку на якій ти зараз знаходишся чи штуки які не є гілкою',
@@ -35566,6 +35954,7 @@ exports.strings = {
     'es_AR': 'Mergear {target} a {current}',
     'es_ES': 'Incorporar {target} en {current}',
     'pt_BR': 'Merge de {target} em {current}',
+    'gl'   : 'Merge de {target} en {current}',
     'fr_FR': 'Merge de {target} dans {current}',
     'ru_RU': 'Слияние {target} в {current}',
     'uk': 'Злиття {target} в {current}',
@@ -35581,6 +35970,7 @@ exports.strings = {
     'es_AR': '¡No hay commits para rebasear! Son todos commits de merge o cambios ya aplicados',
     'es_ES': '¡No hay commits para hacer rebase! Todo es un merge commit o cambios ya hecho.',
     'pt_BR': 'Não há commits para o rebase! São todos commits de merge ou mudanças já aplicadas',
+    'gl'   : '¡Non hai commits para o rebase! Son todos commits de merge ou cambios xa aplicados',
     'fr_FR': 'Aucun commit à rebaser ! C\'est soit un commit de merge, soit des modifications déjà appliquées',
     'ru_RU': 'Нет коммитов для rebase! Все в коммите слияния или изменения уже применены',
     'uk': 'Нема комітів для rebase! Все в коміті злиття (merge commit) чи зміни вже застосовані',
@@ -35596,6 +35986,7 @@ exports.strings = {
     'es_AR': 'Nada para hacer...',
     'es_ES': 'Nada para hacer...',
     'pt_BR': 'Nada a ser feito...',
+    'gl'   : 'Nada para facer...',
     'fr_FR': 'Rien à effectuer…',
     'ru_RU': 'Нечего выполнять...',
     'uk': 'Нічого виконувати...',
@@ -35611,6 +36002,7 @@ exports.strings = {
     'es_AR': 'Fast forwardeando...',
     'es_ES': 'Avanzando rápidamente...',
     'pt_BR': 'Fast forward...',
+    'gl'   : 'Fast forward...',
     'fr_FR': 'En avance rapide…',
     'ru_RU': 'Выполняю Fast forward...',
     'uk': 'Виконую Fast forward',
@@ -35626,6 +36018,7 @@ exports.strings = {
     'es_AR': 'Rama actualmente actualizada',
     'es_ES': 'La rama ya se ha actualizado.',
     'pt_BR': 'Ramo já atualizado',
+    'gl'   : 'Rama xa actualizada',
     'fr_FR': 'Branche déjà à jour',
     'ru_RU': 'Ветка уже обновлена',
     'uk': 'Гілку вже оновлено',
@@ -35641,6 +36034,7 @@ exports.strings = {
     'es_AR': 'La referencia {ref} no existe o es desconocida',
     'es_ES': 'La referencia {ref} no existe o es desconocida',
     'pt_BR': 'A referência {ref} não existe ou é desconhecida',
+    'gl'   : 'A referencia {ref} non existe ou é descoñecida',
     'fr_FR': 'La référence {ref} n\'existe pas ou est inconnue',
     'ru_RU': 'Ссылка {ref} не существует или неизвестна',
     'uk': 'Посилання {ref} не існує чи невідоме',
@@ -35656,6 +36050,7 @@ exports.strings = {
     'es_AR': 'El commit {commit} no tiene un {match}',
     'es_ES': 'El commit {commit} no tiene un {match}',
     'pt_BR': 'O commit {commit} não tem um {match}',
+    'gl'   : 'O commit {commit} non ten un {match}',
     'fr_FR': 'Le commit {commit} n\'a pas de correspondance {match}',
     'ru_RU': 'Коммит {commit} не содержит {match}',
     'uk': 'Коміт {commit} не містить {match}',
@@ -35671,6 +36066,7 @@ exports.strings = {
     'es_AR': '¡Cuidado! Modo de detached HEAD',
     'es_ES': '¡Cuidado! Modo de HEAD separado (detached HEAD)',
     'pt_BR': 'Cuidado! Modo Detached HEAD',
+    'gl'   : '¡Coidado! Modo Detached HEAD',
     'fr_FR': 'Attention ! HEAD est détaché',
     'ru_RU': 'Внимание! Репозиторий в состоянии detached HEAD, то есть не находится ни на какой ветке!',
     'uk': 'Увага! Репозиторій в стані detached HEAD, тобто не знаходиться в жодній гілці!',
@@ -35686,6 +36082,7 @@ exports.strings = {
     'es_AR': 'No es necesario hacer add a los archivos en esta demo',
     'es_ES': 'No es necesario agregar los archivos en esta demo',
     'pt_BR': 'Não é necessário adicionar arquivos neste demo',
+    'gl'   : 'Non é necesario incluír arquivos nesta demo',
     'fr_FR': 'Aucun besoin d\'ajouter des fichiers dans cette démo',
     'ru_RU': 'Это демо не оперирует файлами',
     'uk': 'Не потрібно додавати файли для цього демо',
@@ -35701,6 +36098,7 @@ exports.strings = {
     'es_ES': 'Las opciones que especificaste son incompatibles o incorrectas.',
     'es_AR': 'No es necesario hacer add a los archivos en esta demo',
     'pt_BR': 'As opções que você especificou são incompatíveis ou incorretas',
+    'gl'   : 'As opcións que especificaches son incompatibles ou incorrectas',
     'fr_FR': 'Les options que vous avez spécifiées sont incompatibles ou incorrectes',
     'ru_RU': 'Неправильные опции',
     'uk': 'Опції, які ти ввів, або некорректні або не підтримуються',
@@ -35716,6 +36114,7 @@ exports.strings = {
     'es_AR': 'El commit {commit} ya existe en tus cambios, ¡abortando!',
     'es_ES': 'El commit {commit} ya existe en tus cambios, ¡abortando!',
     'pt_BR': 'O commit {commit} já existe nas suas mudanças, abortando!',
+    'gl'   : 'O commit {commit} xa existe nos seus cambios, ¡abortando!',
     'fr_FR': 'Le commit {commit} existe déjà dans votre ensemble de modifications, opération avortée !',
     'ru_RU': 'Коммит {commit} существует, отменяю!',
     'uk': 'Коміт {commit} вже існує в твоєму change set, відміна!',
@@ -35731,6 +36130,7 @@ exports.strings = {
     'es_AR': 'No podés hacer reset en el modo detached. Usá checkout si querés moverte',
     'es_ES': 'No puedes hacer reset en el modo separado. Usa checkout si quieres moverte.',
     'pt_BR': 'Não se pode fazer reset no modo detached. Use checkout se quiser se mover',
+    'gl'   : 'Non se pode facer reset no modo detached. Use checkout se te queres mover',
     'fr_FR': 'On ne peut pas effectuer un reset quand HEAD est détaché. Utilisez checkout pour déplacer',
     'ru_RU': 'Это невозможно в режиме detached HEAD! Используйте checkout!',
     'uk': 'Неможливо зробити reset в стані detached head! Використовуй checkout якщо хочеш змінити розташування',
@@ -35749,6 +36149,7 @@ exports.strings = {
     'es_ES': 'El comportamiento default para reajustes es --hard, pero siéntete libre de omitir esa ' +
       'opción si te cansas de escribirla en nuestras lecciones. Recuerda quepor defecto el comportamiento en GitHub es --mixed.',
     'pt_BR': 'O comportamento padrão é um reset --hard, fique livre para omitir essa opção!',
+    'gl'   : 'O comportamente por defecto é un reset --hard, Lembra que por defecto en GitHub é --mixed.',
     'fr_FR': 'Le comportement par défaut est un --hard reset, soyez libre d\'omettre cette option !',
     'ru_RU': 'По умолчанию будет выполнен --hard reset, эту опцию можно опускать!',
     'uk': 'На LearnGitBranching reset по замовчуванню використовує --hard, тому цю опцію ' +
@@ -35767,6 +36168,7 @@ exports.strings = {
     'es_AR': 'No existe el concepto de agregar/indexar cambios, así que esa opción o comando es inválido',
     'es_ES': 'No existe el concepto de agregar/indexar cambios, así que esa opción o comando es inválido.',
     'pt_BR': 'Não existe o conceito de adicionar/indexar mudanças, de forma que essa opção ou comando é inválida',
+    'gl'   : 'Non existe o concepto de agregar/indexar cambios, así que esa opción ou comando é inválido.',
     'fr_FR': 'Il n\'y a pas le concept d\'ajouter / mettre en staging, donc cette option ou commande est invalide',
     'ru_RU': 'Это демо не работает с файлами, так что git add не нужен!',
     'uk': 'В цьому демо немає можливості додати файл до робочої копії чи до стейджингу, тому ця опція чи команда некоректна чи не підтримується',
@@ -35782,6 +36184,7 @@ exports.strings = {
     'es_AR': 'Revirtiendo {oldCommit}: {oldMsg}',
     'es_ES': 'Volviendo a {oldCommit}: {oldMsg}',
     'pt_BR': 'Revertendo {oldCommit}: {oldMsg}',
+    'gl'   : 'Revertindo {oldCommit}: {oldMsg}',
     'fr_FR': 'Revert {oldCommit}: {oldMsg}',
     'ru_RU': 'Откатываю {oldCommit}: {oldMsg}',
     'uk': 'Повертаю {oldCommit}: {oldMsg}',
@@ -35797,6 +36200,7 @@ exports.strings = {
     'es_AR': 'Espero como máximo {upper} parámetros para {what}',
     'es_ES': 'Espero al máximo {upper} parámetros para {what}.',
     'pt_BR': 'Espero no máximo {upper} parâmetros para {what}',
+    'gl'   : 'Espero ó máximo {upper} parámetros para {what}',
     'fr_FR': 'J\'attends au plus {upper} argument(s) pour {what}',
     'ru_RU': 'Ожидается максимум {upper} аргумент(ов) для {what}',
     'uk': 'Я очікую максимум {upper} аргумент(ів) для {what}',
@@ -35812,6 +36216,7 @@ exports.strings = {
     'es_AR': 'Espero al menos {lower} parámetros para {what}',
     'es_ES': 'Espero al menos {lower} parámetros para {what}.',
     'pt_BR': 'Espero pelo menos {lower} parâmetros para {what}',
+    'gl'   : 'Agardo polo menos {lower} parámetros para {what}',
     'fr_FR': 'J\'attends au moins {upper} argument(s) pour {what}',
     'ru_RU': 'Ожидается как минимум {lower} аргументов для {what}',
     'uk': 'Я очікую як мінімум {lower} аргумент(ів) для {what}',
@@ -35827,6 +36232,7 @@ exports.strings = {
     'es_AR': 'Ese comando no acepta parámetros comunes',
     'es_ES': 'Ese comando no acepta parámetros generales.',
     'pt_BR': 'Este comando não aceita parâmetros gerais',
+    'gl'   : 'Este comando non acepta parámetros xeráis',
     'fr_FR': 'Cette commande n\'accepte aucun argument général',
     'ru_RU': 'Это команда без аргументов',
     'uk': 'Ця команда не приймає загальних аргументів',
@@ -35842,6 +36248,7 @@ exports.strings = {
     'es_AR': 'Copiá el código de acá abajo',
     'es_ES': 'Copia el código que sigue.',
     'pt_BR': 'Copie o código abaixo',
+    'gl'   : 'Copie o código abaixo',
     'fr_FR': 'Copiez la chaîne d\'arbre ci-dessous',
     'ru_RU': 'Скопируй текст ниже',
     'uk': 'Скопіюй рядок дерева нижче',
@@ -35858,6 +36265,7 @@ exports.strings = {
     'es_AR': 'Aprendé a Branchear en Git',
     'es_ES': 'Aprende Git Branching',
     'pt_BR': 'Learn Git Branching',
+    'gl'   : 'Aprende Git Branching',
     'fr_FR': 'Apprenez Git Branching',
     'ru_RU': 'Изучаем ветвление в git',
     'uk': 'Learn Git Branching',
@@ -35873,6 +36281,7 @@ exports.strings = {
     'es_AR': 'Seleccioná un nivel',
     'es_ES': 'Selecciona un nivel',
     'pt_BR': 'Selecione um nível',
+    'gl'   : 'Selecciona un nivel',
     'fr_FR': 'Choisissez un niveau',
     'ru_RU': 'Выбери уровень',
     'uk': 'Обери рівень',
@@ -35886,6 +36295,7 @@ exports.strings = {
     'zh_CN': '主要',
     'zh_TW': '主要',
     'es_ES': 'Principal',
+    'gl'   : 'Principal',
     'ru_RU': 'Основы',
     'uk'   : 'Основи',
     'ko': '메인'
@@ -35898,6 +36308,7 @@ exports.strings = {
     'zh_CN': '远程',
     'zh_TW': '遠端',
     'es_ES': 'Remota',
+    'gl'   : 'Remota',
     'ru_RU': 'Удаленные репозитории',
     'uk'   : 'Віддалені репозиторії',
     'ko'   : '원격'
@@ -35912,6 +36323,7 @@ exports.strings = {
     'es_AR': 'Perdón, necesitamos mantener los nombres de los branches cortos para visualizarlos. El nombre de tu rama se truncó a 9 caracteres, resultando en "{branch}"',
     'es_ES': 'Perdón, necesitamos mantener los nombres de los branches cortos para visualizarlos. El nombre de tu rama se truncó a 9 caracteres, resultando en "{branch}"',
     'pt_BR': 'Desculpe, precisamos manter os nomes dos ramos curtos para visualizá-los. O nome do seu ramo foi truncado para 9 caracteres, resultando em "{branch}"',
+    'gl'   : 'Desculpe, precisamos manter os nomes das ramas curtas para poder velas. O nome da súa rama foi truncada a 9 letras, resultado en "{branch}"',
     'fr_FR': 'Désolé, nous devons garder les noms de branches courts pour la visualisation. Votre nom de branche a été tronqué à 9 caractères, devenant "{branch}"',
     'ru_RU': 'Для наглядности нам нужно сохранять имена веток короткими. Твоё название сокращено до 9 символов и теперь это "{branch}"',
     'uk': 'Вибач, нам потрібно щоб ім’я гілок було як можна коротше для наглядності. Твоє ім’я гілки було скорочене до 9 літер й тепер це "{branch}"',
@@ -35927,6 +36339,7 @@ exports.strings = {
     'es_AR': 'El nombre "{branch}" no está permitido para los branches',
     'es_ES': 'El nombre "{branch}" es prohibido para nombrar una rama.',
     'pt_BR': 'Um ramo não pode ser chamado de "{branch}"!',
+    'gl'   : 'Unha rama non pode ser chamada "{branch}',
     'fr_FR': 'Ce nom de branche "{branch}" n\'est pas autorisé',
     'ru_RU': 'Название для ветки "{branch}" недопустимо!',
     'uk': 'Назва гілки "{branch}" є недопустимою',
@@ -35941,6 +36354,7 @@ exports.strings = {
     'es_AR': 'El nombre "{tag}" no está permitido para los tags',
     'es_ES': 'El nombre "{tag}" es prohibido para nombrar un tag.',
     'pt_BR': 'Uma tag não pode ser chamada de "{tag}"!',
+    'gl'   : 'Unha etiqueta non pode ser chamada "{tag}"',
     'de_DE': 'Der Tag-Name "{tag}" ist nicht erlaubt!',
     'fr_FR': 'Le nom de tag "{tag}" n\'est pas autorisé',
     'ru_RU': 'Название для тега "{tag}" недопустимо!',
@@ -35957,6 +36371,7 @@ exports.strings = {
     'es_AR': 'La opción {option} no está soportada',
     'es_ES': 'La opción {option} no compatible con esta demo.',
     'pt_BR': 'A opção {option} não é suportada',
+    'gl'   : 'A opción {option} non está soportada',
     'fr_FR': 'L\'option "{option}" n\'est pas supportée',
     'ru_RU': 'Опция "{option}" недопустима!',
     'uk': 'Опція "{option}" не підтримується!',
@@ -35971,7 +36386,8 @@ exports.strings = {
     'zh_TW': 'git <指令> [<參數>]',
     'es_AR': 'git <comando> [<parametros>]',
     'es_ES': 'git <comando> [<parametros>]',
-    'pt_BR': 'git <comando} [<parâmetros>]',
+    'pt_BR': 'git <comando> [<parâmetros>]',
+    'gl'   : 'git <comando> [<parámetros>]',
     'fr_FR': 'git <commande> [<arguments>]',
     'ru_RU': 'git <команда> [<аргументы>]',
     'uk': 'git <команда> [<аргументи>]',
@@ -35987,6 +36403,7 @@ exports.strings = {
     'es_AR': 'Comandos soportados:',
     'es_ES': 'Comandos compatibles:',
     'pt_BR': 'Comandos suportados:',
+    'gl'   : 'Comandos soportados:',
     'fr_FR': 'Commandes supportées',
     'ru_RU': 'Поддерживаемые команды',
     'uk': 'Допустимі команди',
@@ -36002,6 +36419,7 @@ exports.strings = {
     'es_AR': 'Uso:',
     'es_ES': 'Uso:',
     'pt_BR': 'Uso:',
+    'gl'   : 'Uso:',
     'fr_FR': 'Utilisation :',
     'ru_RU': 'Использование:',
     'uk': 'Використання:',
@@ -36017,6 +36435,7 @@ exports.strings = {
     'es_AR': 'Git Versión PCOTTLE.1.0',
     'es_ES': 'Git Versión PCOTTLE.1.0',
     'pt_BR': 'Git versão PCOTTLE.1.0',
+    'gl'   : 'Git versión PCOTTLE.1.0',
     'fr_FR': 'Git version PCOTTLE.1.0',
     'ru_RU': 'Версия git PCOTTLE.1.0',
     'uk': 'Версія git PCOTTLE.1.0',
@@ -36031,6 +36450,7 @@ exports.strings = {
     'es_AR': 'Invirtiendo el árbol...',
     'es_ES': 'Invirtiendo el árbol...',
     'pt_BR': 'Invertendo a árvore...',
+    'gl'   : 'Invirtindo a árbore...',
     'fr_FR': 'Inversion de l\'arbre...',
     'ru_RU': 'Переворачиваю дерево...',
     'uk': 'Перевертаю дерево...',
@@ -36046,6 +36466,7 @@ exports.strings = {
     'es_AR': 'Refrezcando el árbol...',
     'es_ES': 'Actualizando el árbol...',
     'pt_BR': 'Atualizando a árvore...',
+    'gl'   : 'Actualizando a árbore...',
     'fr_FR': 'Actualisation de l\'arbre…',
     'ru_RU': 'Обновляю дерево...',
     'uk': 'Оновлюю дерево...',
@@ -36061,6 +36482,7 @@ exports.strings = {
     'es_AR': 'Localización actualizada a {locale}',
     'es_ES': 'Idioma puesto a {locale}',
     'pt_BR': 'Língua trocada para {locale}',
+    'gl'   : 'Cambiado o idioma a {locale}',
     'fr_FR': 'Langue changée à {locale}',
     'ru_RU': 'Локаль теперь равна {locale}',
     'uk': 'Локаль тепер дорівнює {locale}',
@@ -36076,6 +36498,7 @@ exports.strings = {
     'es_AR': 'Localización vuelta al default, que es {locale}',
     'es_ES': 'Idioma reajustado a su valor por defecto ({locale})',
     'pt_BR': 'Língua retornada para a padrão, que é {locale}',
+    'gl'   : 'Lingua reaxustada ó seu valor por defecto {locale}',
     'fr_FR': 'Langue remise par défaut, qui est {locale}',
     'ru_RU': 'Локаль сброшена. Теперь она равна {locale}',
     'uk': 'Локаль скинута. Тепер вона дорівнює {locale}',
@@ -36091,6 +36514,7 @@ exports.strings = {
     'es_AR': 'Usá alguno de estos comandos para tener más información:',
     'es_ES': 'Por favor usa uno de los siguientes comandos para más información:',
     'pt_BR': 'Use algum destes comandos para ter mais informações:',
+    'gl'   : 'Usa algún destes comandos para ter máis información:',
     'fr_FR': 'Merci d\'utiliser une des commandes suivantes pour obtenir plus d\'informations',
     'ru_RU': 'Для получения большей информации используй следующие команды:',
     'uk': 'Щоб отримати більше інформації використовуй наступні команди:',
@@ -36106,6 +36530,7 @@ exports.strings = {
     'es_AR': 'Esta es una lista de los comandos disponibles:',
     'es_ES': 'Esta es una lista de todos los comandos disponibles:',
     'pt_BR': 'Esta é uma lista dos comandos disponíveis:',
+    'gl'   : 'Esta é unha lista dos comando dispoñibles:',
     'fr_FR': 'Ci-dessous est la liste de toutes les commandes disponibles :',
     'ru_RU': 'Вот все поддерживаемуе команды:',
     'uk': 'Ось список всіх можливих команд:',
@@ -36121,6 +36546,7 @@ exports.strings = {
     'es_AR': 'Directorio cambiado a "/los/directorios/no/importan/en/esta/demo"',
     'es_ES': 'Directorio cambiado a "/los/directorios/no/importan/en/esta/demo"',
     'pt_BR': 'Diretório mudado para "/diretorios/nao/importam/neste/demo"',
+    'gl'   : 'Directorio cambiado a "/os/directorios/non/importan/nesta/demo"',
     'fr_FR': 'Répertoire changé à "/directories/dont/matter/in/this/demo" (les répertoires ne servent à rien dans cette démo)',
     'ru_RU': 'Директория изменена на "/директории/не/важны/в/этом/демо"',
     'uk': 'Директорія змінена на "/директорії/не/мають/значення/в/цьому/демо"',
@@ -36136,6 +36562,7 @@ exports.strings = {
     'es_AR': 'NoTePreocupesPorLosArchivosEnEstaDemo.txt',
     'es_ES': 'NoTePreocupesPorLosArchivosEnEstaDemo.txt',
     'pt_BR': 'NaoSePreocupeComNomesDeArquivoNesteDemo.txt',
+    'gl'   : 'NonTePreocupesPolosCambiosNestaDemo.txt',
     'fr_FR': 'DontWorryAboutFilesInThisDemo.txt (ne vous préoccupez pas des noms de fichier dans cette démo)',
     'ru_RU': 'НеНадоЗаботитьсяОФайлахВЭтомДемо.txt',
     'uk': 'ЗабийНаФайлиВЦьомуДемо.txt',
@@ -36150,6 +36577,7 @@ exports.strings = {
     'es_AR': 'LGB no puede recibir comandos en dispositivos móviles. Visitanos desde una desktop, ¡lo vale! :D',
     'es_ES': 'LGB no puede recibir comandos en dispositivos móviles. Visítanos en una computadora de escritorio, ¡lo vale! :D',
     'pt_BR': 'Provavelmente você não vai conseguir digitar comandos no celular, neste caso tente acessar de um computador',
+    'gl'   : 'LGB non pode recibir os comandos nos dispositivos móbiles. Visítanos dende un ordenador de escritorio, ¡paga a pena! :D',
     'fr_FR': 'Impossible de faire apparaître le clavier sur mobile / tablette :( Essayez de passer sur un ordinateur de bureau :D',
     'ru_RU': 'Мобильные не поддерживаются, зайди с компьютера!',
     'uk': 'LGB не підтримує ввід тексту з мобільного, зайди з компьютера! Це цього варте!',
@@ -36161,10 +36589,11 @@ exports.strings = {
     'en_US': 'Share this tree with friends! They can load it with "import tree"',
     'de_DE': 'Teile diesen git-Baum mit Freunden! Sie können ihn mit "import tree" laden',
     'zh_CN': '与你的好友分享提交树！他们可以用 "import tree" 加载它',
-    'zh_TW': '與你的好友分享這棵樹！他們可以用 "import tree" 來載入它',
+    'zh_TW': '與你的好友分享這棵���！他們可以用 "import tree" 來載入它',
     'es_AR': '¡Compartí este árbol con amigos! Pueden cargarlo con "import tree"',
     'es_ES': '¡Comparte este árbol con amigos! Pueden cargarlo con "import tree"',
     'pt_BR': 'Compartilhe esta árvore com seus amigos! Eles podem carregá-la com "import tree"',
+    'gl'   : '¡Comparte esta árbore cos teus amigos! Eles poden cargalo con "import tree"',
     'fr_FR': 'Partagez cet arbre avec vos amis ! Ils peuvent le charger avec "import tree"',
     'ru_RU': 'Поделись деревом с друзьями! Они могут загрузить его при помощи "import tree"',
     'uk': 'Поділись цим деревом з друзями! Вони зможуть його завантажити за допомогою "import tree"',
@@ -36180,6 +36609,7 @@ exports.strings = {
     'es_AR': '¡Pegá un blob JSON abajo!',
     'es_ES': '¡Pega un blob JSON abajo!',
     'pt_BR': 'Cole o JSON abaixo!',
+    'gl'   : 'Pega un JSON abaixo!',
     'fr_FR': 'Collez un blob JSON ci-dessous !',
     'ru_RU': 'Вставь JSON ниже!',
     'uk': 'Встав JSON нижче!',
@@ -36195,6 +36625,7 @@ exports.strings = {
     'es_AR': 'El mapa resuelto fue eliminado, estás arrancando desde un estado limpio',
     'es_ES': 'El mapa resuelto fue eliminado, estás empezando de un estado limpio.',
     'pt_BR': 'Mapa de resolvidos descartado, você está começando com ficha limpa!',
+    'gl'   : 'O mapa resolto foi eliminado, estás arrancando dende un estado limpo.',
     'fr_FR': 'La carte des niveaux résolus a été effacée, vous repartez de zéro !',
     'ru_RU': 'Всё сброшено! Можно начать с чистого листа!',
     'uk': 'Все скинуте! Можна починати з чистого аркушу!',
@@ -36210,6 +36641,7 @@ exports.strings = {
     'es_AR': '¡No estás en un nivel! Estás en el sandbox, comenzá un nivel usando "levels"',
     'es_ES': '¡No estás en un nivel! Estás en el sandbox, comienza un nivel con "levels"',
     'pt_BR': 'Você não está em um nível! Você está no sandbox, comece um nível com "levels"',
+    'gl'   : '¡Non estás en ningún nivel! Estás nunha caixa de arena, comeza un nivel usando "levels"',
     'fr_FR': 'Vous n\'êtes pas dans un niveau ! Vous êtes dans le mode bac à sable, commencez un niveau avec "levels"',
     'ru_RU': 'Ты не проходишь уровень! Ты в песочнице! Чтобы начать уровень, используй команду "levels"!',
     'uk': 'Ти не в рівні! Ти в пісочниці! Почни рівень з "levels"',
@@ -36225,6 +36657,7 @@ exports.strings = {
     'es_AR': 'No se encontró ningún nivel {id}. Abriendo la vista de selección de niveles...',
     'es_ES': 'No se encontró ningún nivel {id}. Abriendo la vista de selección de niveles...',
     'pt_BR': 'O nível "{id}" não existe! Abrindo uma caixa de seleção de nível',
+    'gl'   : 'O nivel "{id}" non existe! Abrindo unha caixa de seleción de nivel',
     'fr_FR': 'Le niveau dont l\'identifiant est {id} n\'a pas été trouvé ! Ouverture de la vue de sélection des niveaux',
     'ru_RU': 'Уровень с id "{id}" не найден! Открываю выбор уровней',
     'uk': 'Рівень з id "{id}" не знайдений! Відкриваю вибір рівней',
@@ -36240,6 +36673,7 @@ exports.strings = {
     'es_AR': 'No hay comandos que deshacer',
     'es_ES': 'No hay comandos que deshacer',
     'pt_BR': 'Você já desfez tudo!',
+    'gl'   : 'Nonn hai comandos que desfacer',
     'fr_FR': 'La pile d\'annulation est vide !',
     'ru_RU': 'Некуда откатывать!',
     'uk': 'Нема куди відкатуватися',
@@ -36255,6 +36689,7 @@ exports.strings = {
     'es_AR': 'Ya resolviste este nivel, probá otros usando "levels" o volvé al sandbox usando "sandbox"',
     'es_ES': 'Ya resolviste este nivel, prueba otros usando "levels" o vuelve al sandbox usando "sandbox"',
     'pt_BR': 'Você já resolveu este nível, tente outros com "levels" ou volte ao sandbox com "sandbox"',
+    'gl'   : 'Xa resolviches este nivel, proba outros usando "levels" ou volve á caixa de area con "sandbox"',
     'fr_FR': 'Vous avez déjà résolu ce niveau, essayez d\'autres niveaux avec "levels" ou revenez au bac à sable avec "sandbox"',
     'ru_RU': 'Ты уже прошел этот уровень, попробуй пройти другие при помощи команды "levels" или иди в песочницу "sandbox"',
     'uk': 'Ти вже пройшов цей рівень, спробуй інші рівні з "levels" чи повернись в пісочницю з "sandbox"',
@@ -36268,6 +36703,7 @@ exports.strings = {
     'zh_CN': '恭喜过关！！',
     'zh_TW': '恭喜，本關解決了！！',
     'es_ES': '¡Resuelto!\n:D',
+    'gl'   : '¡Resolto!',
     'ru_RU': 'Решено!!\n:D',
     'uk'   : 'Вирішено!!\n:D',
     'ko'   : '해결 완료!!\n:D'
@@ -36282,6 +36718,7 @@ exports.strings = {
     'es_AR': '¡Ese comando de git está deshabilitado para este nivel!',
     'es_ES': '¡Ese comando de git está deshabilitado para este nivel!',
     'pt_BR': 'Achou que seria fácil assim? Desabilitamos esse comando durante este nível, só para dificultar ;-)',
+    'gl'   : '¡Ese comando de git está deshabilitado para este nivel!',
     'fr_FR': 'Cette commande git est désactivée pour ce niveau !',
     'ru_RU': 'На этом уровне нельзя использовать эту команду!',
     'uk': 'На цьому рівні не можна використовувати цю команду!',
@@ -36297,6 +36734,7 @@ exports.strings = {
     'es_AR': 'Este es el JSON de este nivel. Compartilo con quien quieras o mandámelo por Github',
     'es_ES': 'Este es el JSON de este nivel. Compártelo con quien quieras o mandámelo por Github.',
     'pt_BR': 'Aqui está o JSON para este nível! Compartilhe com alguém ou me envie pelo Github',
+    'gl'   : 'Este é o JSON deste nivel. Comparteo con quen queiras ou mándao por Github',
     'fr_FR': 'Voici le JSON pour ce niveau ! Partagez-le avec quelqu\'un ou envoyez-le moi sur Github',
     'ru_RU': 'Вот JSON для этого уровня! Поделись им с кем-нибудь или отправь его нам на GitHub',
     'uk': 'Ось JSON для цього рівня! Поділись з кимось чи відправ мені його на Github',
@@ -36312,6 +36750,7 @@ exports.strings = {
     'es_AR': 'No especificaste un mensaje de inicio, ¿querés agregar uno?',
     'es_ES': 'No especificaste un mensaje de inicio, ¿quieres agregar uno?',
     'pt_BR': 'Você não especificou uma mensagem de início, quer colocar uma?',
+    'gl'   : 'Non especificaches unha mensaxe de incio. ¿queres agregar un?',
     'fr_FR': 'Vous n\'avez pas spécifié de dialogue de départ, voulez-vous en ajouter un ?',
     'ru_RU': 'Не указано стартово сообщение! Точно продолжаем?',
     'uk': 'Не вказано стартовий діалог, хочеш додати стартовий діалог?',
@@ -36327,6 +36766,7 @@ exports.strings = {
     'es_AR': 'No especificaste ninguna pista, ¿querés agregar alguna?',
     'es_ES': 'No especificaste ninguna pista, ¿quieres agregar alguna?',
     'pt_BR': 'Você não especificou uma dica, quer colocar uma?',
+    'gl'   : 'Ti non especificaches unha pista, ¿queres agregar algunha?',
     'fr_FR': 'Vous n\'avez pas spécifié d\'indice, voulez-vous en ajouter un ?',
     'ru_RU': 'Не указана подсказка для уровня! Пренебречь? Вальсируем?',
     'uk': 'Не вказана підказка, хочеш додати підказку?',
@@ -36342,6 +36782,7 @@ exports.strings = {
     'es_AR': 'Ingresá una pista para este nivel, o dejalo en blanco si no querés incluir ninguna',
     'es_ES': 'Ingresa una pista para este nivel, o déjalo en blanco si no quieres incluir ninguna.',
     'pt_BR': 'Colocque uma dica para este nível, ou deixe em branco se não quiser incluir',
+    'gl'   : 'Ingresa unha pista para este nivel, ou déixao en branco se non a queres incluír.',
     'fr_FR': 'Entrez l\'indice pour ce niveau, ou laissez-le vide pour ne pas l\'inclure',
     'ru_RU': 'Введи подсказку для уровня, если хочешь.',
     'uk': 'Додай підказку для рівня, якщо хочеш',
@@ -36357,6 +36798,7 @@ exports.strings = {
     'es_AR': 'Ingresá el nombre del nivel',
     'es_ES': 'Ingresa el nombre del nivel.',
     'pt_BR': 'Coloque o nome do nível',
+    'gl'   : 'Coloque o nome do nivel',
     'fr_FR': 'Entrez le nom pour ce niveau',
     'ru_RU': 'Введи название уровня',
     'uk': 'Введи назву рівня',
@@ -36372,6 +36814,7 @@ exports.strings = {
     'es_AR': '¡Tu solución está vacía! Algo hay que hacer',
     'es_ES': '¡Tu solución está vacía! Algo hay que hacer.',
     'pt_BR': 'Sua solução está vazia! O aprendiz deveria ter que fazer alguma coisa',
+    'gl'   : '¡Su solución está vacía! Algo haberá que facer.',
     'fr_FR': 'Votre solution est vide !! Quelque chose ne tourne pas rond',
     'ru_RU': 'Решение не указано! Так не годится!',
     'uk': 'Розв’язок порожній!! Щось не так',
@@ -36387,6 +36830,7 @@ exports.strings = {
     'es_AR': 'Estableciendo el punto de inicio... La solución y el objetivo serán sobreescritos si ya habían sido definidos',
     'es_ES': 'Estableciendo el punto de inicio... La solución y el objetivo serán sobreescritos si ya habían sido definidos.',
     'pt_BR': 'Esbelecendo o ponto de início... a solução e o objetivo serão sobrescritos caso já existirem',
+    'gl'   : 'Establecendo o punto de inicio... A solución e o obxectivo serán sobreescritos se xa foron definidos.',
     'fr_FR': 'Redéfinition du point de départ… la solution et la cible seront écrasés s\'ils ont déjà été définis',
     'ru_RU': 'Устанавливаю стартовую точку... Решение и итоговое состояние будут стёрты, если они указаны ранее',
     'uk': 'Встановлюю стартову точку... розв’язок та ціль будуть переписані якщо вони були задані раніше',
@@ -36402,6 +36846,7 @@ exports.strings = {
     'es_AR': 'Estás en un nivel, por lo que hay varios tipos de ayuda. Por favor elegí entre "help level" para aprender algo más sobre esta lección, "help general" para ayuda sobre el uso de Learn GitBranching, o "objective" para aprender a resolver este nivel.',
     'es_ES': 'Estás en un nivel, por lo que hay varios tipos de ayuda. Por favor elige "help level" para aprender más sobre esta lección, "help general" para ayuda sobre el uso de Learn GitBranching, o "objective" para aprender a resolver este nivel.',
     'pt_BR': 'Você está em um nível, então há vários tipos de ajuda. Selecione "help level" para aprender mais sobre esta lição, "help general" para aprender a usar o Learn GitBranching, ou "objective" ver como resolver o nível.',
+    'gl'   : 'Estás nun nivel, entón hai varios tipos de axuda. Selecione "help level" para aprender máis sobre esta lección, "gelp general" para aprender a usar o Learn Git Branching, ou "objective" para ver como resolver o nivel.',
     'fr_FR': 'Vous êtes dans un niveau, donc plusieurs formes d\'aide sont disponibles. Merci de sélectionner soit "help level" pour en apprendre plus sur cette leçon, "help general" pour l\'utilisation de Learn GitBranching, ou "objective" pour apprendre comment résoudre le niveau',
     'ru_RU': 'При прохождении уровня доступны несколько видов помощи. Определить что нужно: "help level" чтобы получить информацию об этом уровне, "help general" для того, чтобы узнать о игре в целом или "objective" чтобы узнать что надо сделать в этом уровне.',
     'uk': 'При проходженні рівня доступні декілька різновидів допомоги. Виберіть або "help level" щоб взнати більше про цей рівень, чи "help general" щоб взнати більше про Learn Git Branching, чи "objective" щоб дізнатись більше про проходження цього рівня',
@@ -36417,6 +36862,7 @@ exports.strings = {
     'es_AR': 'Estás en el constructor de niveles, por lo que hay varios tipos de ayuda. Elegí entre "help general" para ayuda sobre Learn GitBranching y "help builder" para ayuda sobre el constructor de niveles',
     'es_ES': 'Estás en un constructor de niveles, por lo que hay varios tipos de ayuda. Elige "help general" para ayuda sobre Learn GitBranching o "help builder" para ayuda sobre el constructor de niveles',
     'pt_BR': 'Você está no construtor de nívels, então há vários tipos de ajuda. Selecione "help general" ou "help builder"',
+    'gl'   : 'Estás no constructor de niveis, polo que hai varios tipos de axuda. Elixe "help general" ou "help builder"',
     'fr_FR': 'Vous êtes dans l\'éditeur de niveaux, donc plusieurs formes d\'aide sont disponibles. Merci de sélectionner soit "help general" soit "help builder"',
     'ru_RU': 'При создании уровней доступны несколько видов помощи. Выбери между "help general" и "help builder"',
     'uk': 'При створенні рівня доступні декілька різновидів допомоги. Виберіть або "help general", чи "help builder"',
@@ -36426,11 +36872,12 @@ exports.strings = {
   'show-goal-button': {
     '__desc__': 'button label to show goal',
     'en_US': 'Show Goal',
-    'de_DE': 'Schauen Ziel',
+    'de_DE': 'Ziel anzeigen',
     'zh_TW': '顯示目標',
     'zh_CN': '显示目标',
     'fr_FR': 'Afficher les cibles',
     'pt_BR': 'Mostrar objetivo',
+    'gl'   : 'Amosar obxectivo',
     'es_AR': 'Mostrar objetivo',
     'es_ES': 'Mostrar objetivo',
     'ja'   : 'ゴールを表示',
@@ -36442,11 +36889,12 @@ exports.strings = {
   'hide-goal-button': {
     '__desc__': 'button label to hide goal',
     'en_US': 'Hide Goal',
-    'de_DE': 'Verstecken Ziel',
+    'de_DE': 'Ziel verstecken',
     'fr_FR': 'Cacher les cibles',
     'zh_TW': '隱藏目標',
     'zh_CN': '隐藏目标',
     'pt_BR': 'Ocultar objetivo',
+    'gl'   : 'Ocultar obxectivo',
     'es_AR': 'Ocultar objetivo',
     'es_ES': 'Ocultar objetivo',
     'ja'   : 'ゴールを隠す',
@@ -36462,6 +36910,7 @@ exports.strings = {
     'zh_TW': '提示',
     'zh_CN': '提示',
     'es_ES': 'Objetivo',
+    'gl'   : 'Obxectivo',
     'ru_RU': 'Задача',
     'uk': 'Задача',
     'ko': '목적'
@@ -36473,7 +36922,8 @@ exports.strings = {
     'de_DE': 'Git Demonstration',
     'zh_TW': 'Git示範',
     'zh_CN': 'Git示范',
-    'es_ES': 'Demonstración de Git',
+    'es_ES': 'Demostración de Git',
+    'gl'   : 'Demostración de Git',
     'ru_RU': 'Git демо',
     'uk'   : 'Git демо',
     'ko'   : 'Git 데모'
@@ -36488,6 +36938,7 @@ exports.strings = {
     'es_AR': 'Objetivo a cumplir',
     'es_ES': 'Objetivo a cumplir',
     'pt_BR': 'Objetivo a cumprir',
+    'gl'   : 'Obxectivo a cumprir',
     'fr_FR': 'Cible à atteindre',
     'ja'   : '到達目標',
     'ru_RU': 'Цель уровня',
@@ -36503,6 +36954,7 @@ exports.strings = {
     'es_AR': '<span class="fwber">Nota:</span> Sólo la rama master va a ser chequeada en este nivel. Las otras ramas sólo son para referencia. Como siempre, podés ocultar este mensaje con "hide goal"',
     'es_ES': '<span class="fwber">Nota:</span> Sólo la rama master va a ser inspeccionado en este nivel. Las otras ramas sólo son para referencia (etiquetados abajo con guion). Siempre puedes ocultar este mensaje con "hide goal."',
     'pt_BR': '<span class="fwber">Nota:</span> Apenas o ramo master será verificado neste nível. Os outros ramos (dentro das caixas clareadas) são somente para referência. Como sempre, você pode ocultar esta janela com "hide goal"',
+    'gl': '<span class="fwber">Nota:</span> Só a rama master será verificada neste nivel. As outras ramas (dentro das caixas clareadas) son soamente de referencia. Coma sempre, podes ocultar está ventá con "hide goal"',
     'zh_CN': '<span class="fwber">注意:</span>本关卡中，只检查 master 分支，其他分支只是用作 reference 存在（以虚线标签表示）。照常，你可以用 “hide goal” 来隐藏此窗口。',
     'zh_TW': '在這個關卡中，只有 master branch 會被檢查，別的 branch 只是用來做為 reference （下面用虛線符號表示）。一如往常，你可以利用 "hide goal" 來隱藏這個對話視窗',
     'ja': '<span class="fwber">Note:</span> masterブランチだけをこのlevelではチェックします。その他のブランチ（以下では、破線で示されています）に関しては、参照のためにあります。また、いつでもこのウィンドウは"hide goal"と打つかクリックで閉じれます',
@@ -36520,6 +36972,7 @@ exports.strings = {
     'es_AR': 'Podés ocultar esta ventana con "hide goal"',
     'es_ES': 'Puedes ocultar esta ventana con "hide goal."',
     'pt_BR': 'Você pode ocultar esta janela com "hide goal"',
+    'gl'   : 'Podes ocultar esta ventá con "hide goal"',
     'fr_FR': 'Vous pouvez masquer cette fenêtre avec "Cacher les cibles"',
     'ja'   : 'このウィンドウは"hide goal"と打つかクリックで閉じれます',
     'ru_RU': 'Можно скрыть это окно при помощи "hide goal"',
@@ -36536,6 +36989,7 @@ exports.strings = {
     'es_AR': 'Podés ocultar esta ventana con "hide start"',
     'es_ES': 'Puedes ocultar esta ventana con "hide start."',
     'pt_BR': 'Você pode ocultar esta janela com "hide start"',
+    'gl'   : 'Podes ocultar esta ventá con "hide start"',
     'fr_FR': 'Vous pouvez masquer cette fenêtre avec "hide start"',
     'ja'   : 'このウィンドウは"hide start"かクリックで閉じれます',
     'ru_RU': 'Можно скрыть это окно при помощи "hide start"',
@@ -36552,6 +37006,7 @@ exports.strings = {
     'es_AR': 'Constructor de niveles',
     'es_ES': 'Constructor de niveles',
     'pt_BR': 'Construtor de níveis',
+    'gl'   : 'Constructor de nivéis',
     'fr_FR': 'Éditeur de niveaux',
     'ja'   : 'Levelエディタ',
     'ru_RU': 'Редактор уровней',
@@ -36568,6 +37023,7 @@ exports.strings = {
     'es_AR': '¡No hay mensaje de inicio para este nivel!',
     'es_ES': '¡No hay mensaje de inicio para este nivel!',
     'pt_BR': 'Não há mensagem de início para este nível!',
+    'gl'   : '¡Non hai mensaxe de inicio para este nivel!',
     'fr_FR': 'Il n\'y a aucun dialogue de départ à afficher pour ce niveau !',
     'ja'   : 'このLevelにはスタートダイアログが存在しません',
     'ru_RU': 'Нет стартового сообщение для уровня!',
@@ -36584,6 +37040,7 @@ exports.strings = {
     'es_AR': 'Mmm... Pareciera no haber pistas para este nivel :-/',
     'es_ES': 'Mmm... Parece que no hay pistas para este nivel. :-/',
     'pt_BR': 'Hmm, não existe nenhuma pista para este nível :-/',
+    'gl'   : 'Hmm, non existe ningunha pista para este nivel :-/',
     'fr_FR': 'Hum, il ne semble pas y avoir d\'indice pour ce niveau :-/',
     'ja'   : 'あらら、このLevelでは、残念ながらヒントが存在しません :-/',
     'ru_RU': "Милый мой, хороший, догадайся сам :-/ Подсказка не создана...",
@@ -36600,6 +37057,7 @@ exports.strings = {
     'es_AR': 'Aún no hay traducción para {key} :( ¡Metete en Github y sugerí una! :)',
     'es_ES': 'Aún no hay traducción para {key}. :( ¡Métete en Github y sugiere una! :)',
     'pt_BR': 'Não existe tradução para {key} :( Pule no Github e sugira uma! :)',
+    'gl'   : 'Non existe tradución para {key} :( Axúdanos en Github e suxire unha! :)',
     'fr_FR': 'La traduction pour {key} n\'existe pas encore :( Venez sur Github pour en offrir une !',
     'ja'   : '{key}の翻訳がまだ存在しません :( GitHubでの、翻訳の協力をお願いします m(_)m',
     'ru_RU': 'Перевода для {key} не создано :( Пожалуйста, предложи перевод на GitHub',
@@ -36616,6 +37074,7 @@ exports.strings = {
     'es_AR': 'Este mensaje o texto aún no fue traducido a tu idioma :( ¡Metete en Github y ayudanos a traducirlo!',
     'es_ES': 'Este mensaje o texto aún no fue traducido a tu idioma. :( ¡Métete en Github y ayúdanos a traducirlo!',
     'pt_BR': 'Esta mensagem ou texto não foi traduzida para Português :( Ajude-nos a traduzir no Github!',
+    'gl'   : 'Esta mensaxe ou texto non foi traducida ó teu idioma :( Axúdanos a traducir a web en Github, é moi doado!',
     'fr_FR': 'Ce message n\'a pas encore été traduit dans votre langue :( Venez sur Github aider à la traduction !',
     'ja'   : 'このダイアログ、またはテキストの翻訳がまだ存在しません :( GitHubでの、翻訳の協力をお願いします m(_)m',
     'ru_RU': 'Для этого сообщения нет перевода :( Пожалуйста, предложи перевод на GitHub',
@@ -37034,7 +37493,7 @@ var LevelBuilder = Level.extend({
 exports.LevelBuilder = LevelBuilder;
 exports.regexMap = regexMap;
 
-},{"../app":176,"../dialogs/levelBuilder":180,"../git/gitShim":185,"../intl":191,"../level":195,"../level/parseWaterfall":196,"../models/commandModel":200,"../stores/LevelStore":212,"../stores/LocaleStore":213,"../util":220,"../util/errors":217,"../views":230,"../views/builderViews":227,"../views/multiView":232,"../visuals/visualization":243,"backbone":1,"q":12}],194:[function(require,module,exports){
+},{"../app":176,"../dialogs/levelBuilder":180,"../git/gitShim":185,"../intl":191,"../level":195,"../level/parseWaterfall":196,"../models/commandModel":200,"../stores/LevelStore":212,"../stores/LocaleStore":213,"../util":220,"../util/errors":217,"../views":230,"../views/builderViews":227,"../views/multiView":232,"../visuals/visualization":243,"backbone":1,"q":13}],194:[function(require,module,exports){
 var intl = require('../intl');
 
 var Commands = require('../commands');
@@ -37736,7 +38195,7 @@ var Level = Sandbox.extend({
 exports.Level = Level;
 exports.regexMap = regexMap;
 
-},{"../actions/GlobalStateActions":173,"../actions/LevelActions":174,"../app":176,"../commands":177,"../dialogs/confirmShowSolution":179,"../git/gitShim":185,"../graph/treeCompare":189,"../intl":191,"../level/disabledMap":194,"../log":197,"../react_views/LevelToolbarView.jsx":206,"../sandbox/":209,"../stores/GlobalStateStore":211,"../stores/LevelStore":212,"../util":220,"../util/errors":217,"../views":230,"../views/multiView":232,"../visuals/visualization":243,"q":12,"react":167}],196:[function(require,module,exports){
+},{"../actions/GlobalStateActions":173,"../actions/LevelActions":174,"../app":176,"../commands":177,"../dialogs/confirmShowSolution":179,"../git/gitShim":185,"../graph/treeCompare":189,"../intl":191,"../level/disabledMap":194,"../log":197,"../react_views/LevelToolbarView.jsx":206,"../sandbox/":209,"../stores/GlobalStateStore":211,"../stores/LevelStore":212,"../util":220,"../util/errors":217,"../views":230,"../views/multiView":232,"../visuals/visualization":243,"q":13,"react":168}],196:[function(require,module,exports){
 var GitCommands = require('../git/commands');
 var Commands = require('../commands');
 var SandboxCommands = require('../sandbox/commands');
@@ -38285,7 +38744,7 @@ exports.TagCollection = TagCollection;
 exports.CommandBuffer = CommandBuffer;
 
 
-},{"../app":176,"../git":187,"../models/commandModel":200,"../util/constants":214,"../util/errors":217,"backbone":1,"q":12}],200:[function(require,module,exports){
+},{"../app":176,"../git":187,"../models/commandModel":200,"../util/constants":214,"../util/errors":217,"backbone":1,"q":13}],200:[function(require,module,exports){
 var Backbone = require('backbone');
 
 var Errors = require('../util/errors');
@@ -38680,7 +39139,7 @@ var CommandHistoryView = React.createClass({displayName: "CommandHistoryView",
 
 module.exports = CommandHistoryView;
 
-},{"../app":176,"../react_views/CommandView.jsx":202,"react":167}],202:[function(require,module,exports){
+},{"../app":176,"../react_views/CommandView.jsx":202,"react":168}],202:[function(require,module,exports){
 var React = require('react');
 
 var reactUtil = require('../util/reactUtil');
@@ -38828,7 +39287,7 @@ var CommandView = React.createClass({displayName: "CommandView",
 
 module.exports = CommandView;
 
-},{"../util/reactUtil":224,"react":167,"react/lib/keyMirror":152}],203:[function(require,module,exports){
+},{"../util/reactUtil":224,"react":168,"react/lib/keyMirror":153}],203:[function(require,module,exports){
 var HelperBarView = require('../react_views/HelperBarView.jsx');
 var Main = require('../app');
 var React = require('react');
@@ -38863,11 +39322,6 @@ var CommandsHelperBarView = React.createClass({displayName: "CommandsHelperBarVi
         this.fireCommand('levels');
       }.bind(this),
     }, {
-      text: 'Solution',
-      onClick: function() {
-        this.fireCommand('show solution');
-      }.bind(this),
-    }, {
       text: 'Reset',
       onClick: function() {
         this.fireCommand('reset');
@@ -38899,7 +39353,7 @@ var CommandsHelperBarView = React.createClass({displayName: "CommandsHelperBarVi
 
 module.exports = CommandsHelperBarView;
 
-},{"../app":176,"../log":197,"../react_views/HelperBarView.jsx":204,"react":167}],204:[function(require,module,exports){
+},{"../app":176,"../log":197,"../react_views/HelperBarView.jsx":204,"react":168}],204:[function(require,module,exports){
 var React = require('react');
 
 var reactUtil = require('../util/reactUtil');
@@ -38969,7 +39423,7 @@ var HelperBarView = React.createClass({displayName: "HelperBarView",
 
 module.exports = HelperBarView;
 
-},{"../util/reactUtil":224,"react":167}],205:[function(require,module,exports){
+},{"../util/reactUtil":224,"react":168}],205:[function(require,module,exports){
 var HelperBarView = require('../react_views/HelperBarView.jsx');
 var Main = require('../app');
 var React = require('react');
@@ -39066,6 +39520,12 @@ var IntlHelperBarView = React.createClass({displayName: "IntlHelperBarView",
         this.fireCommand('locale uk; levels');
       }.bind(this)
     }, {
+      text: 'Galego',
+      testID: 'galician',
+      onClick: function() {
+        this.fireCommand('locale gl; levels');
+      }.bind(this)
+    }, {
       icon: 'signout',
       onClick: function() {
         this.props.onExit();
@@ -39077,7 +39537,7 @@ var IntlHelperBarView = React.createClass({displayName: "IntlHelperBarView",
 
 module.exports = IntlHelperBarView;
 
-},{"../app":176,"../log":197,"../react_views/HelperBarView.jsx":204,"react":167}],206:[function(require,module,exports){
+},{"../app":176,"../log":197,"../react_views/HelperBarView.jsx":204,"react":168}],206:[function(require,module,exports){
 var React = require('react');
 var PropTypes = React.PropTypes;
 
@@ -39162,7 +39622,7 @@ var LevelToolbarView = React.createClass({displayName: "LevelToolbarView",
 
 module.exports = LevelToolbarView;
 
-},{"../intl":191,"../util/reactUtil":224,"react":167}],207:[function(require,module,exports){
+},{"../intl":191,"../util/reactUtil":224,"react":168}],207:[function(require,module,exports){
 var HelperBarView = require('../react_views/HelperBarView.jsx');
 var IntlHelperBarView =
   require('../react_views/IntlHelperBarView.jsx');
@@ -39228,14 +39688,6 @@ var MainHelperBarView = React.createClass({displayName: "MainHelperBarView",
           shownBar: BARS.INTL
         });
       }.bind(this)
-    }, {
-      newPageLink: true,
-      icon: 'twitter',
-      href: 'https://twitter.com/petermcottle'
-    }, {
-      newPageLink: true,
-      icon: 'facebook',
-      href: 'https://www.facebook.com/LearnGitBranching'
     }];
   }
 
@@ -39243,7 +39695,7 @@ var MainHelperBarView = React.createClass({displayName: "MainHelperBarView",
 
 module.exports = MainHelperBarView;
 
-},{"../log":197,"../react_views/CommandsHelperBarView.jsx":203,"../react_views/HelperBarView.jsx":204,"../react_views/IntlHelperBarView.jsx":205,"../util/keyMirror":221,"react":167}],208:[function(require,module,exports){
+},{"../log":197,"../react_views/CommandsHelperBarView.jsx":203,"../react_views/HelperBarView.jsx":204,"../react_views/IntlHelperBarView.jsx":205,"../util/keyMirror":221,"react":168}],208:[function(require,module,exports){
 var util = require('../util');
 
 var constants = require('../util/constants');
@@ -39343,9 +39795,10 @@ var instantCommands = [
       intl.str('show-all-commands'),
       '<br/>'
     ];
-    allCommands.forEach(function(regex, command) {
-      lines.push(command);
-    });
+    Object.keys(allCommands)
+      .forEach(function(command) {
+        lines.push(command);
+      });
 
     throw new CommandResult({
       msg: lines.join('\n')
@@ -39652,7 +40105,7 @@ var Sandbox = Backbone.View.extend({
   sharePermalink: function(command, deferred) {
     var treeJSON = JSON.stringify(this.mainVis.gitEngine.exportTree());
     var url =
-      'https://learngitbranching.js.org/?NODEMO&command=importTreeNow%20' + escape(treeJSON);
+      'https://toofff.github.io/learnGitBranching/?NODEMO&command=importTreeNow%20' + escape(treeJSON);
     command.setResult(
       intl.todo('Here is a link to the current state of the tree: ') + '\n' + url
     );
@@ -39903,7 +40356,7 @@ var Sandbox = Backbone.View.extend({
 
 exports.Sandbox = Sandbox;
 
-},{"../actions/LevelActions":174,"../app":176,"../dialogs/sandbox":182,"../git/gitShim":185,"../intl":191,"../level":195,"../level/builder":193,"../level/disabledMap":194,"../level/parseWaterfall":196,"../models/commandModel":200,"../stores/LevelStore":212,"../util":220,"../util/errors":217,"../views":230,"../views/builderViews":227,"../views/multiView":232,"../visuals/visualization":243,"backbone":1,"q":12}],210:[function(require,module,exports){
+},{"../actions/LevelActions":174,"../app":176,"../dialogs/sandbox":182,"../git/gitShim":185,"../intl":191,"../level":195,"../level/builder":193,"../level/disabledMap":194,"../level/parseWaterfall":196,"../models/commandModel":200,"../stores/LevelStore":212,"../util":220,"../util/errors":217,"../views":230,"../views/builderViews":227,"../views/multiView":232,"../visuals/visualization":243,"backbone":1,"q":13}],210:[function(require,module,exports){
 "use strict";
 
 var AppConstants = require('../constants/AppConstants');
@@ -39986,7 +40439,7 @@ AppConstants.StoreSubscribePrototype,
 
 module.exports = CommandLineStore;
 
-},{"../constants/AppConstants":178,"../dispatcher/AppDispatcher":183,"events":3,"object-assign":10}],211:[function(require,module,exports){
+},{"../constants/AppConstants":178,"../dispatcher/AppDispatcher":183,"events":7,"object-assign":11}],211:[function(require,module,exports){
 "use strict";
 
 var AppConstants = require('../constants/AppConstants');
@@ -40046,7 +40499,7 @@ AppConstants.StoreSubscribePrototype,
 
 module.exports = GlobalStateStore;
 
-},{"../constants/AppConstants":178,"../dispatcher/AppDispatcher":183,"events":3,"object-assign":10}],212:[function(require,module,exports){
+},{"../constants/AppConstants":178,"../dispatcher/AppDispatcher":183,"events":7,"object-assign":11}],212:[function(require,module,exports){
 "use strict";
 
 var AppConstants = require('../constants/AppConstants');
@@ -40219,7 +40672,7 @@ AppConstants.StoreSubscribePrototype,
 
 module.exports = LevelStore;
 
-},{"../../levels":245,"../constants/AppConstants":178,"../dispatcher/AppDispatcher":183,"events":3,"object-assign":10,"underscore":168}],213:[function(require,module,exports){
+},{"../../levels":245,"../constants/AppConstants":178,"../dispatcher/AppDispatcher":183,"events":7,"object-assign":11,"underscore":169}],213:[function(require,module,exports){
 "use strict";
 
 var AppConstants = require('../constants/AppConstants');
@@ -40330,7 +40783,7 @@ AppConstants.StoreSubscribePrototype,
 
 module.exports = LocaleStore;
 
-},{"../constants/AppConstants":178,"../dispatcher/AppDispatcher":183,"events":3,"object-assign":10}],214:[function(require,module,exports){
+},{"../constants/AppConstants":178,"../dispatcher/AppDispatcher":183,"events":7,"object-assign":11}],214:[function(require,module,exports){
 /**
  * Constants....!!!
  */
@@ -40469,7 +40922,7 @@ $(document).ready(function() {
 });
 
 
-},{"../actions/CommandLineActions":172,"../actions/GlobalStateActions":173,"../actions/LevelActions":174,"../actions/LocaleActions":175,"../app":176,"../app/index.js":176,"../commands":177,"../git":187,"../git/headless":186,"../graph/treeCompare":189,"../intl":191,"../level":195,"../models/collections":199,"../models/commandModel":200,"../sandbox/":209,"../stores/CommandLineStore":210,"../stores/GlobalStateStore":211,"../stores/LevelStore":212,"../stores/LocaleStore":213,"../util/constants":214,"../util/index":220,"../util/zoomLevel":226,"../views":230,"../views/builderViews":227,"../views/gitDemonstrationView":229,"../views/levelDropdownView":231,"../views/multiView":232,"../views/rebaseView":233,"../visuals":236,"../visuals/animation":235,"../visuals/animation/animationFactory":234,"../visuals/tree":237,"../visuals/visBranch":239,"markdown":8,"q":12}],217:[function(require,module,exports){
+},{"../actions/CommandLineActions":172,"../actions/GlobalStateActions":173,"../actions/LevelActions":174,"../actions/LocaleActions":175,"../app":176,"../app/index.js":176,"../commands":177,"../git":187,"../git/headless":186,"../graph/treeCompare":189,"../intl":191,"../level":195,"../models/collections":199,"../models/commandModel":200,"../sandbox/":209,"../stores/CommandLineStore":210,"../stores/GlobalStateStore":211,"../stores/LevelStore":212,"../stores/LocaleStore":213,"../util/constants":214,"../util/index":220,"../util/zoomLevel":226,"../views":230,"../views/builderViews":227,"../views/gitDemonstrationView":229,"../views/levelDropdownView":231,"../views/multiView":232,"../views/rebaseView":233,"../visuals":236,"../visuals/animation":235,"../visuals/animation/animationFactory":234,"../visuals/tree":237,"../visuals/visBranch":239,"markdown":9,"q":13}],217:[function(require,module,exports){
 var Backbone = require('backbone');
 
 var MyError = Backbone.Model.extend({
@@ -41281,7 +41734,7 @@ exports.TextGrabber = TextGrabber;
 exports.MultiViewBuilder = MultiViewBuilder;
 exports.MarkdownPresenter = MarkdownPresenter;
 
-},{"../util/throttle":225,"../views":230,"../views/multiView":232,"markdown":8,"q":12,"underscore":168}],228:[function(require,module,exports){
+},{"../util/throttle":225,"../views":230,"../views/multiView":232,"markdown":9,"q":13,"underscore":169}],228:[function(require,module,exports){
 var Backbone = require('backbone');
 
 var Main = require('../app');
@@ -41734,7 +42187,7 @@ var GitDemonstrationView = ContainedBase.extend({
 
 exports.GitDemonstrationView = GitDemonstrationView;
 
-},{"../git/headless":186,"../intl":191,"../models/commandModel":200,"../util":220,"../util/keyboard":222,"../views":230,"../visuals/visualization":243,"backbone":1,"markdown":8,"q":12,"underscore":168}],230:[function(require,module,exports){
+},{"../git/headless":186,"../intl":191,"../models/commandModel":200,"../util":220,"../util/keyboard":222,"../views":230,"../visuals/visualization":243,"backbone":1,"markdown":9,"q":13,"underscore":169}],230:[function(require,module,exports){
 (function (process){
 var _ = require('underscore');
 var Q = require('q');
@@ -42438,7 +42891,7 @@ exports.CanvasTerminalHolder = CanvasTerminalHolder;
 exports.NextLevelConfirm = NextLevelConfirm;
 
 }).call(this,require('_process'))
-},{"../app":176,"../dialogs/nextLevel":181,"../intl":191,"../log":197,"../util/constants":214,"../util/debounce":215,"../util/keyboard":222,"../util/throttle":225,"_process":11,"backbone":1,"markdown":8,"q":12,"underscore":168}],231:[function(require,module,exports){
+},{"../app":176,"../dialogs/nextLevel":181,"../intl":191,"../log":197,"../util/constants":214,"../util/debounce":215,"../util/keyboard":222,"../util/throttle":225,"_process":12,"backbone":1,"markdown":9,"q":13,"underscore":169}],231:[function(require,module,exports){
 var _ = require('underscore');
 var Q = require('q');
 var Backbone = require('backbone');
@@ -42887,7 +43340,7 @@ var SeriesView = BaseView.extend({
 
 exports.LevelDropdownView = LevelDropdownView;
 
-},{"../../levels":245,"../app":176,"../intl":191,"../log":197,"../stores/LevelStore":212,"../stores/LocaleStore":213,"../util":220,"../util/debounce":215,"../util/keyboard":222,"../views":230,"backbone":1,"q":12,"underscore":168}],232:[function(require,module,exports){
+},{"../../levels":245,"../app":176,"../intl":191,"../log":197,"../stores/LevelStore":212,"../stores/LocaleStore":213,"../util":220,"../util/debounce":215,"../util/keyboard":222,"../views":230,"backbone":1,"q":13,"underscore":169}],232:[function(require,module,exports){
 var Q = require('q');
 var Backbone = require('backbone');
 
@@ -43083,7 +43536,7 @@ var MultiView = Backbone.View.extend({
 
 exports.MultiView = MultiView;
 
-},{"../util/debounce":215,"../util/keyboard":222,"../views":230,"../views/builderViews":227,"../views/gitDemonstrationView":229,"backbone":1,"q":12}],233:[function(require,module,exports){
+},{"../util/debounce":215,"../util/keyboard":222,"../views":230,"../views/builderViews":227,"../views/gitDemonstrationView":229,"backbone":1,"q":13}],233:[function(require,module,exports){
 var GitError = require('../util/errors').GitError;
 var _ = require('underscore');
 var Q = require('q');
@@ -43263,7 +43716,7 @@ var RebaseEntryView = Backbone.View.extend({
 
 exports.InteractiveRebaseView = InteractiveRebaseView;
 
-},{"../util/errors":217,"../views":230,"backbone":1,"q":12,"underscore":168}],234:[function(require,module,exports){
+},{"../util/errors":217,"../views":230,"backbone":1,"q":13,"underscore":169}],234:[function(require,module,exports){
 var Backbone = require('backbone');
 var Q = require('q');
 
@@ -43435,7 +43888,7 @@ AnimationFactory.delay = function(animationQueue, time) {
 exports.AnimationFactory = AnimationFactory;
 
 
-},{"../../util/constants":214,"./index":235,"backbone":1,"q":12}],235:[function(require,module,exports){
+},{"../../util/constants":214,"./index":235,"backbone":1,"q":13}],235:[function(require,module,exports){
 var Q = require('q');
 var Backbone = require('backbone');
 var GlobalStateActions = require('../../actions/GlobalStateActions');
@@ -43585,7 +44038,7 @@ exports.Animation = Animation;
 exports.PromiseAnimation = PromiseAnimation;
 exports.AnimationQueue = AnimationQueue;
 
-},{"../../actions/GlobalStateActions":173,"../../util/constants":214,"backbone":1,"q":12}],236:[function(require,module,exports){
+},{"../../actions/GlobalStateActions":173,"../../util/constants":214,"backbone":1,"q":13}],236:[function(require,module,exports){
 var Q = require('q');
 
 var intl = require('../intl');
@@ -44540,7 +44993,7 @@ function blendHueStrings(hueStrings) {
 
 exports.GitVisuals = GitVisuals;
 
-},{"../app":176,"../intl":191,"../stores/GlobalStateStore":211,"../util/constants":214,"../util/debounce":215,"../visuals/visBranch":239,"../visuals/visEdge":240,"../visuals/visNode":241,"../visuals/visTag":242,"q":12}],237:[function(require,module,exports){
+},{"../app":176,"../intl":191,"../stores/GlobalStateStore":211,"../util/constants":214,"../util/debounce":215,"../visuals/visBranch":239,"../visuals/visEdge":240,"../visuals/visNode":241,"../visuals/visTag":242,"q":13}],237:[function(require,module,exports){
 var Backbone = require('backbone');
 
 var VisBase = Backbone.Model.extend({
@@ -46613,7 +47066,7 @@ var Visualization = Backbone.View.extend({
 exports.Visualization = Visualization;
 
 }).call(this,require('_process'))
-},{"../app":176,"../git":187,"../models/collections":199,"../util/eventBaton":219,"../visuals":236,"_process":11,"backbone":1}],244:[function(require,module,exports){
+},{"../app":176,"../git":187,"../models/collections":199,"../util/eventBaton":219,"../visuals":236,"_process":12,"backbone":1}],244:[function(require,module,exports){
 exports.level = {
   "goalTreeString": "{\"branches\":{\"master\":{\"target\":\"C7\",\"id\":\"master\"},\"bugWork\":{\"target\":\"C2\",\"id\":\"bugWork\"}},\"commits\":{\"C0\":{\"parents\":[],\"id\":\"C0\",\"rootCommit\":true},\"C1\":{\"parents\":[\"C0\"],\"id\":\"C1\"},\"C2\":{\"parents\":[\"C1\"],\"id\":\"C2\"},\"C3\":{\"parents\":[\"C1\"],\"id\":\"C3\"},\"C4\":{\"parents\":[\"C3\"],\"id\":\"C4\"},\"C5\":{\"parents\":[\"C2\"],\"id\":\"C5\"},\"C6\":{\"parents\":[\"C4\",\"C5\"],\"id\":\"C6\"},\"C7\":{\"parents\":[\"C6\"],\"id\":\"C7\"}},\"HEAD\":{\"target\":\"master\",\"id\":\"HEAD\"}}",
   "solutionCommand": "git branch bugWork master^^2^",
@@ -46626,6 +47079,7 @@ exports.level = {
     "ja"   : "複数の親",
     "es_AR": "Múltiples padres",
     "pt_BR": "Múltiplos pais",
+    "gl"   : "Múltiples pais",
     "zh_TW": "多個 parent commit",
     "ru_RU": "Здоровая семья, или несколько родителей",
     "ko"   : "다수의 부모",
@@ -46639,6 +47093,7 @@ exports.level = {
     "zh_CN": "使用 `git branch bugWork` 加上一个目标提交记录来创建消失的引用。",
     "es_AR": "Usá `git branch bugWork` sobre algún commit para crear la referencia faltante",
     "pt_BR": "Use `git branch bugWork` com um commit alvo para criar a referência que falta",
+    "gl"   : "Usa `git branch bugWork` sobre calquera commit para crear a referencia que falta",
     "zh_TW": "在一個指定的 commit 上面使用 `git branch bugWork`。",
     "ru_RU": "`git branch bugWork` на нужном коммите поможет создать нужную ссылку.",
     "ko"   : "`git branch bugWork`를 대상 커밋과 함께 사용해서 부족한 참조를 만드세요",
@@ -47167,6 +47622,94 @@ exports.level = {
         }
       ]
     },
+
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "### Especificando pais",
+              "",
+              "Tanto o modificador `~`, como o modificador `^` aceptan un número opcional despois del.",
+              "",
+              "Mellor que especificar o número de commits que percorrer cara atrás (que é o que o `~` fai), o modificador sobre `^` especifica  qué referencia do pai vai ser seguida dende o commit con merge. Lembra qué os commits do merge teñen varios pais, entón o camiño a seguir é ambiguo.",
+              "",
+              "Git normalmente seguirá ó \"primeiro\" pai de un commit de merge, pero especificando un número co `^` muda o comportamento do pai.",
+              "",
+              "Xa chega de faladoiros, vexamos o comando en acción.",
+              ""
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Aquí temos un commit do merge. Se fixéramos checkout en `master^` sen especificar un número, imos seguir ó primeiro pai enriba do commit do merge. ",
+              "",
+              "(*Na nosa vista, o primeiro pai é aquel directamente enriba do commit do merge.*)"
+            ],
+            "afterMarkdowns": [
+              "Sinxelo, eso é aquelo co que xa estamos acostumados."
+            ],
+            "command": "git checkout master^",
+            "beforeCommand": "git checkout HEAD^; git commit; git checkout master; git merge C2"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Agora imos, en vez de iso, especificar o segundo pai..."
+            ],
+            "afterMarkdowns": [
+              "¿Viches? Subimos para o outro pai."
+            ],
+            "command": "git checkout master^2",
+            "beforeCommand": "git checkout HEAD^; git commit; git checkout master; git merge C2"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Os modificadores `^` e `~` pódense mover ao redor da árbore de commits con moito poder:"
+            ],
+            "afterMarkdowns": [
+              "Rápido coma a luz!"
+            ],
+            "command": "git checkout HEAD~; git checkout HEAD^2; git checkout HEAD~2",
+            "beforeCommand": "git commit; git checkout C0; git commit; git commit; git commit; git checkout master; git merge C5; git commit"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Aínda máis tolo, eses modificadores poden ser encadeados en conxunto! Olla ahí:"
+            ],
+            "afterMarkdowns": [
+              "O mesmo movemento feito antes, pero feito nun só comando."
+            ],
+            "command": "git checkout HEAD~^2~2",
+            "beforeCommand": "git commit; git checkout C0; git commit; git commit; git commit; git checkout master; git merge C5; git commit"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "### Pono na práctica",
+              "",
+              "Para completar este nível, crea unha nova rama no destino especificado.",
+              "",
+              "Obviamente sería máis sinxelo especificar o commit diretamente (algo como `C6`), pero en vez de facer eso, ¡podes usar os modificadores dos que falamos!"
+            ]
+          }
+        }
+      ]
+    },
     "zh_TW": {
       "childViews": [
         {
@@ -47668,6 +48211,7 @@ var sequenceInfo = exports.sequenceInfo = {
       'fr_FR': 'Séquence d\'introduction',
       'es_AR': 'Secuencia introductoria',
       'pt_BR': 'Sequência introdutória',
+      'gl'   : 'Secuencia introductoria',
       'zh_CN': '基础篇',
       'zh_TW': '基礎篇',
       'ko'   : 'git 기본',
@@ -47681,6 +48225,7 @@ var sequenceInfo = exports.sequenceInfo = {
       'fr_FR': 'Une introduction en douceur à la majorité des commandes git',
       'es_AR': 'Una breve introducción a la mayoría de los comandos de git',
       'pt_BR': 'Uma breve introdução à maioria dos comandos do git',
+      'gl'   : 'Unha breve introducción á maioría dos comandos de git',
       'zh_CN': '循序渐进地介绍 Git 主要命令',
       'zh_TW': '循序漸進地介紹 git 主要命令',
       'ko'   : 'git의 주요 명령어를 깔끔하게 알려드립니다',
@@ -47696,6 +48241,7 @@ var sequenceInfo = exports.sequenceInfo = {
       'fr_FR': 'Montée en puissance',
       'es_AR': 'Acelerando',
       'pt_BR': 'Acelerando',
+      'gl'   : 'Alixeirando',
       'zh_CN': '高级篇',
       'zh_TW': '進階篇',
       'ru_RU': 'Едем дальше',
@@ -47709,6 +48255,7 @@ var sequenceInfo = exports.sequenceInfo = {
       'fr_FR': 'Le prochain excellent plat de pur git. J\'espère que vous êtes affamés',
       'es_AR': 'La próxima porción de 100% maravillas git. Espero que estés hambriento',
       'pt_BR': 'A próxima porção de maravilhas do git. Faminto?',
+      'gl'   : 'A próxima porción das marabillas de git. Agardo que estés esfameado',
       'zh_CN': '要开始介绍 Git 的超棒特性了，快来吧！',
       'zh_TW': '接下來是 git 非常厲害的地方！相信你已經迫不及待了吧！',
       'ru_RU': 'Следующая порция абсолютной git-крутотенюшки. Проголодались?',
@@ -47725,6 +48272,7 @@ var sequenceInfo = exports.sequenceInfo = {
       'fr_FR': 'Push & Pull -- dépôts gits distants !',
       'es_AR': 'Push & Pull -- Git Remotes!',
       'pt_BR': 'Push & Pull -- repositórios remotos no Git!',
+      'gl'   : 'Push & Pull -- Repositorios remotos no Git!',
       'zh_CN': 'Push & Pull —— Git 远程仓库！',
       'zh_TW': 'Push & Pull -- Git Remotes!',
       'ru_RU': 'Push & Pull - удалённые репозитории в Git!',
@@ -47738,6 +48286,7 @@ var sequenceInfo = exports.sequenceInfo = {
       'de_DE': 'Zeit Eure 1en und 0en zu teilen; Coding mit sozialer Komponente',
       'es_AR': 'Hora de compartir sus 1\'s y 0\'s, chicos; programar se volvió social!',
       'pt_BR': 'Hora de compartilhar seus 1\'s e 0\'s, crianças; programar agora é social!',
+      'gl'   : 'Hora de compartilos seus 1\' e 0\'s, rapaces; programar agora é social!',
       'zh_CN': '是时候分享你的代码了，让编码变得社交化吧',
       'zh_TW': '是時候分享你的程式碼了',
       'ru_RU': 'Настало время поделиться своими единичками и нулями. Время коллективного программирования',
@@ -47754,6 +48303,7 @@ var sequenceInfo = exports.sequenceInfo = {
       'fr_FR': 'Vers l\'infini et au-delà -- dépôts distants version avancée',
       'es_AR': 'Hasta el origin y más allá -- Git Remotes avanzado!',
       'pt_BR': 'Até a origin e além -- repositórios remotos avançados!',
+      'gl'   : 'Ata á orixe e máis aló -- repositorios remotos avanzados!',
       'zh_CN': '关于 origin 和它的周边 —— Git 远程仓库高级操作',
       'zh_TW': '關於 origin 和其它 repo，git remote 的進階指令',
       'ru_RU': 'Через origin – к звёздам. Продвинутое использование Git Remotes',
@@ -47766,6 +48316,7 @@ var sequenceInfo = exports.sequenceInfo = {
       'ja'   : '絶えず上級者の仕事は存在する。。。',
       'es_AR': 'Y pensabas que ser un dictador benévolo sería divertido...',
       'pt_BR': 'E você achava que ser um déspota esclarecido seria mais divertido...',
+      'gl'   : 'E pensabas que ser un dictador benévolo sería divertido...',
       'zh_CN': '做一名仁慈的独裁者一定会很有趣……',
       'zh_TW': '而且你會覺得做一個仁慈的獨裁者會很有趣...',
       'de_DE': 'Git Remotes für Fortgeschrittene',
@@ -47781,6 +48332,7 @@ var sequenceInfo = exports.sequenceInfo = {
       'fr_FR': 'Déplacer le travail',
       'es_AR': 'Moviendo el trabajo por ahí',
       'pt_BR': 'Movendo trabalho por aí',
+      'gl'   : 'Movendo o traballo por ahí',
       'ja'   : 'コードの移動',
       'ko'   : '코드 이리저리 옮기기',
       'zh_CN': '移动提交记录',
@@ -47794,6 +48346,7 @@ var sequenceInfo = exports.sequenceInfo = {
       'fr_FR': 'Soyez à l\'aise pour modifier l\'arbre Git',
       'es_AR': 'Ponete cómodo con modificar el directorio fuente',
       'pt_BR': 'Fique confortável em modificar a árvore de códigos',
+      'gl'   : 'Ponte cómodo modificando a árbore de git',
       'ko'   : '작업 트리를 수정하는건 식은죽 먹기지요 이제',
       'ja'   : '話題のrebaseってどんなものだろう？って人にオススメ',
       'zh_CN': '自由修改提交树',
@@ -47810,6 +48363,7 @@ var sequenceInfo = exports.sequenceInfo = {
       'fr_FR': 'Un assortiment',
       'es_AR': 'Bolsa de gatos',
       'pt_BR': 'Sortidos',
+      'gl'   : 'Todo mesturado',
       'ko'   : '종합선물세트',
       'zh_CN': '杂项',
       'zh_TW': '活用 git 的指令',
@@ -47823,6 +48377,7 @@ var sequenceInfo = exports.sequenceInfo = {
       'fr_FR': 'Un assortiment de techniques et astuces pour utiliser Git',
       'es_AR': 'Un rejunte de técnicas, trucos y tips sobre Git',
       'pt_BR': 'Técnicas, truques e dicas sortidas sobre Git',
+      'gl'   : 'Mestura de técnicas, trucos e consellos',
       'ko'   : 'Git을 다루는 다양한 팁과 테크닉을 다양하게 알아봅니다',
       'zh_CN': 'Git 技术、技巧与贴士大集合',
       'zh_TW': 'git 的技術，招數與技巧',
@@ -47838,6 +48393,7 @@ var sequenceInfo = exports.sequenceInfo = {
       'fr_FR': 'Sujets avancés',
       'es_AR': 'Temas avanzados',
       'pt_BR': 'Temas avançados',
+      'gl'   : 'Temas avanzados',
       'zh_CN': '高级话题',
       'zh_TW': '進階主題',
       'ru_RU': 'Продвинутый уровень',
@@ -47851,6 +48407,7 @@ var sequenceInfo = exports.sequenceInfo = {
       'fr_FR': 'Pour les plus courageux !',
       'es_AR': '¡Para los verdaderos valientes!',
       'pt_BR': 'Para os verdadeiros valentes!',
+      'gl'   : '¡Para os verdadeiros valerosos!',
       'zh_CN': '只为真正的勇士！',
       'zh_TW': '來成為真正的強者吧！',
       'ru_RU': 'Если ты смелый, ловкий, умелый – потренируйся тут',
@@ -47878,6 +48435,7 @@ exports.level = {
     "ko": "Git에서 브랜치 쓰기",
     "es_AR": "Brancheando en Git",
     "pt_BR": "Ramos no Git",
+    "gl"   : "Ramas en Git",
     "fr_FR": "Gérer les branches avec Git",
     "zh_CN": "Git Branch",
     "zh_TW": "建立 git branch",
@@ -47890,6 +48448,7 @@ exports.level = {
     "ja"   : "ブランチの作成（\"git branch [ブランチ名]\"）と、チェックアウト（\"git checkout [ブランチ名]\"）",
     "es_AR": "Hacé una nueva rama con \"git branch [nombre]\" y cambiá a ella con \"git checkout [nombre]\"",
     "pt_BR": "Crie um novo ramo com \"git branch [nome]\" e mude para ele com \"git checkout [nome]\"",
+    "gl"   : "Crea unha nova rama con \"git branch [nome]\" e cambiate a ela facendo \"git checkout [nome]\"",
     "fr_FR": "Faites une nouvelle branche avec \"git branch [nom]\" positionnez-vous dans celle-ci avec \"git checkout [nom]\"",
     "zh_CN": "用 'git branch <分支名>' 来创建分支，用 'git checkout <分支名>' 来切换到分支",
     "zh_TW": "用 'git branch [ branch 名稱]' 來建立 branch，用 'git checkout [ branch 名稱]' 切換到該 branch",
@@ -48285,6 +48844,88 @@ exports.level = {
             "markdowns": [
               "Ok! Vocês estão todos prontos para ramificar. Assim que esta janela fechar,",
               "crie um novo ramo chamado `bugFix` e mude para esse ramo"
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Ramas en Git",
+              "",
+              "As Ramas en Git son tamén increiblemente liviás. Elas sinxelamente son referencias a un mesmo commit específico, e nada máis. É por iso que moitos entusiastas do Git entonan o mantra:",
+              "",
+              "```",
+              "ramifica cedo, ramifica sempre",
+              "```",
+              "",
+              "Debido a non existir sobrecarga de memoria facendo moitas ramas, é máis sinxelo dividir a lóxica do teu traballo en ramas que ter unha enorme.",
+              "",
+              "Cando comezamos a mesturar ramas e commits imos ver como eses dous recursos combínanse ben. Por agora lembra que unha rama esencialmente di \"Quero incluír o traballo deste commit e de todos os seus ancestros\"."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Vexamos cómo as ramas funcionan na práctica.",
+              "",
+              "Aquí imos crear unha nova rama chamada `newImage`"
+            ],
+            "afterMarkdowns": [
+              "Mira, solo tes que poñer eso para crear unha rama! A rama `newImage` agora apunta ó commit `C1`"
+            ],
+            "command": "git branch newImage",
+            "beforeCommand": ""
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Imos intentar colocar algún traballo nesta nova rama. Pincha no botón de abaixo"
+            ],
+            "afterMarkdowns": [
+              "¡Bueno home! A rama `master` moveuse pero a rama `newImage` non! Eso é porque a nova rama non era a \"actual\", e é por iso que o asterisco (*) ficaba na rama `master`"
+            ],
+            "command": "git commit",
+            "beforeCommand": "git branch newImage"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Ímoslle decir a Git que nos queremos mover á rama con:",
+              "",
+              "```",
+              "git checkout [nome]",
+              "```",
+              "",
+              "Esto vainos levar á rama que tiñamos antes de facer os nosos cambios."
+            ],
+            "afterMarkdowns": [
+              "¡Imos alá! Os nosos cambios foron grabados na nova rama."
+            ],
+            "command": "git checkout newImage; git commit",
+            "beforeCommand": "git branch newImage"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "¡Ok! Estas preparado para facer ramas. Así que podes pechar a ventá,",
+              "crear unha rama chamada `bugFix` e moverte para esa rama.",
+              "",
+              "Inda así, hai un atallo: se ti quixeras crear unha nova ",
+              "rama e moverte a ela ó mesmo tempo, ti podes escribir simplemente ",
+              "`git checkout -b [a-tua- rama]`."
             ]
           }
         }
@@ -48770,6 +49411,7 @@ exports.level = {
     "de_DE": "Einführung in Git Commits",
     "es_AR": "Introducción a los commits de Git",
     "pt_BR": "Introdução aos commits no Git",
+    "gl"   : "Introducción ós commits de Git",
     "fr_FR": "Introduction aux commits avec Git",
     "ja"   : "Gitのコミット",
     'ko': 'Git 커밋 소개',
@@ -48786,6 +49428,7 @@ exports.level = {
     "de_DE": "Gib einfach zweimal 'git commit' ein um den Level abzuschließen",
     "es_AR": "¡Simplemente tipeá 'git commit' dos veces para terminar!",
     "pt_BR": "Simplesmente digite 'git commit' duas vezes para concluir!",
+    "gl"   : "Simplemente escribe 'git commit' dúas veces para terminar.",
     "fr_FR": "Il suffit de saisir 'git commit' deux fois pour réussir !",
     "zh_CN": "执行两次 'git commit' 就可以过关了！",
     "zh_TW": "輸入兩次 'git commit' 就可以完成！",
@@ -49007,6 +49650,48 @@ exports.level = {
           "options": {
             "markdowns": [
               "Vamos lá, tente você agora! Quando esta janela se fechar, faça dois commits para completar o nível."
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Commits en Git",
+              "Un commit nun repositorio de git rexistra unha fotografía (snapshot) de tódolos arquivos no seu directorio. É coma un copy&paste xigante, ¡pero todavía mellor!",
+              "",
+              "Git quere gardar os commits o máis pequenos posíbel, por iso non copia directamente o directorio completo sempre que fas un commit. El pode (cando é posíbel) comprimir nun commit un conxunto de cambios (ou un _\"delta\"_) entre unha versión do teu respositorio e o seguinte.",
+              "",
+              "Git tamén garda un histórico de cando se fixo cada cambio. Por iso a maioría dos commits teñen ancestros enriba deles, e nos indicámolos con frechas na nosa visualización. ¡Manter a historia é óptimo para tódolos que traballan no proxecto!",
+              "",
+              "Hai moito que aprender, pero por agora podes pensar que os commits son fotos do teu proxecto. Os commits son liviáns, e cambiar dun para o outro é extremadamente rápido!"
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Vexamos o que iso significa na práctica. Á dereita, temos unha visualización dun (pequeno) repositorio de git. Hai dous commits por agora: o commit inicial, `C0`, e un commit que lle segue, `C1`, que podería ter algúns cambios interesantes.",
+              "",
+              "Pincha no botón de abaixo para facer un novo commit"
+            ],
+            "afterMarkdowns": [
+              "¡Alá imos! Mi ma!. Fixemos cambios no repositorio e gardámolos nun commit. O commit que creaches ten un pai, `C1`, que é unha referencia do commit no que se basea."
+            ],
+            "command": "git commit",
+            "beforeCommand": ""
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Alá imos. ¡Inténtao ti agora! Cando se peche a ventá, fai dous commits para completar o nivel."
             ]
           }
         }
@@ -49282,6 +49967,7 @@ exports.level = {
     "de_DE": "Mergen in git",
     "es_AR": "Mergeando en Git",
     "pt_BR": "Merge no Git",
+    "gl"   : "Merge en Git",
     "fr_FR": "Faire des 'merge' (fusions de branches) avec Git",
     "ko": "Git에서 브랜치 합치기(Merge)",
     "ja"　　　: "ブランチとマージ",
@@ -49296,6 +49982,7 @@ exports.level = {
     "ja"　　　: "指示された順番でコミットすること（masterの前にbugFixで）",
     "es_AR": "Acordate de commitear en el orden especificado (bugFix antes de master)",
     "pt_BR": "Lembre-se de commitar na ordem especificada (bugFix antes de master)",
+    "gl"   : "Lembrate de facer commit na orde específica (bugFix antes de master)",
     "fr_FR": "Pensez à faire des commits dans l'ordre indiqué (bugFix avant master)",
     "zh_CN": "要按目标窗口中指定的顺序进行提交（bugFix 先于 master）",
     "zh_TW": "記住按指定的順序 commit（bugFix 比 master 優先）",
@@ -49647,6 +50334,75 @@ exports.level = {
               "* Junte o ramo `bugFix` no `master` com `git merge`",
               "",
               "*Lembre-se, você pode sempre mostrar esta mensagem novamente com o comando \"objective\"!*"
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Ramas e merges",
+              "",
+              "¡Xenial! Agora sabemos como facer commits e crear ramas. Agora precisamos aprender unha forma de combinar o traballo de dúas ramas diferentes. Iso permitiríanos ramificar, facer un novo cambio, e entón mesturalo de volta.",
+              "",
+              "O primeiro comando para mesturar o traballo que imos ver é `git merge`. O merge de Git crea un commit especial que ten dous pais únicos. Un commit con dous pais significa \"Quero incluír todo o traballo deste pai cos cambios do outro pai, *e* o conxunto de tódolos ancestros.\"",
+              "",
+              "É máis doado con unha visualización, ímolo ver na seguinte vista."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Aquí nos temos dúas ramas; cada unha ten un commit que é único. Isto significa que ningunha rama inclúe o conxunto de \"traballo\" feito no noso repositorio. Imos arranxar esto cun merge.",
+              "",
+              "Imos xuntar a rama `bugFix` na `master`"
+            ],
+            "afterMarkdowns": [
+              "¡Uah! ¿Viches? Antes de todo, `master` agora apunta a un commit que ten dous pais. Se ti sigues as frechas subindo a árbore de commits a partir de `master`, serás capaz de ver tódolos commits ata a raíz, calquera de eles. Isto significa que a rama `master` contén todo o traballo realizado no repositorio ata ese momento.",
+              "",
+              "Ademáis, ¿viches como cambiaron as cores dos commits? Para axudarte a aprender, hai unha lenda. Cada rama ten unha única cor. Cada commit ten a cor resultante de mesturar as cores de tódalas ramas que contén.",
+              "",
+              "Aquí vemos que a  rama `master` está mesturada en todos os commits, pero a cor da rama `bugFix` non o está. Imos arranxar eso..."
+            ],
+            "command": "git merge bugFix",
+            "beforeCommand": "git checkout -b bugFix; git commit; git checkout master; git commit"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Imos mesturar a rama `master` en `bugFix`:"
+            ],
+            "afterMarkdowns": [
+              "Como o `bugFix` é un ancestro de `master`, o git non ten traballo que facer; el só ten que mover o punteiro de `bugFix` para o mesmo commit que `master`.",
+              "",
+              "Agora tódolos commits teñen a mesma cor, o que significa que ambas ramas teñen o mesmo traballo no repositorios! Iepa!"
+            ],
+            "command": "git checkout bugFix; git merge master",
+            "beforeCommand": "git checkout -b bugFix; git commit; git checkout master; git commit; git merge bugFix"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Para completar este nivel, fai o seguinte:",
+              "",
+              "* Crea unha nova ramara chamada `bugFix`",
+              "* Fai checkout da rama `bugFix` con `git checkout bugFix`",
+              "* Fai un commit",
+              "* Volve á rama `master` con `git checkout`",
+              "* Fai un novo commit",
+              "* Xunta a rama `bugFix` en `master` con `git merge`",
+              "",
+              "¡Recorda, podes amosar esta mensaxe novamente co comando \"objective\"!"
             ]
           }
         }
@@ -50079,6 +50835,7 @@ exports.level = {
     "ja"   : "Rebaseの解説",
     "es_AR": "Introducción a rebase",
     "pt_BR": "Introdução ao rebase",
+    "gl"   : "Introducción a rebase",
     "fr_FR": "Introduction à rebase",
     "ko": "리베이스(rebase)의 기본",
     "zh_CN": "Git Rebase",
@@ -50093,6 +50850,7 @@ exports.level = {
     "fr_FR": "Assurez-vous de bien faire votre commit sur bugFix en premier",
     "es_AR": "Asegurate de commitear desde bugFix primero",
     "pt_BR": "O bugFix precisa ser commitado primeiro",
+    "gl"   : "Asegurate de facer o commit dende bugFix primeiro",
     "ko": "bugFix 브랜치에서 먼저 커밋하세요",
     "zh_CN": "先在 bugFix 分支上进行提交",
     "zh_TW": "你要先在 bugFix branch 進行 commit",
@@ -50431,6 +51189,73 @@ exports.level = {
               "* Faça um commit",
               "* Volte ao master e faça um novo commit",
               "* Faça checkout do bugFix novamente e faça rebase no master",
+              "",
+              "Boa sorte!"
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Rebase en Git",
+              "",
+              "A segunda forma de mesturar traballo entre ramas é o *rebase*. O rebase esencialmente pega un conxunto de commits, \"copia\" os commits, e os sitúa en outro lugar.",
+              "",
+              "Esto pode paracer confuso, pero a vantaxe do rebase é que se pode usar para construír unha secuencia  máis bonita e linial de commits. O rexisto de commits do repositorio estará máis limpo se só se permite facer rebases.",
+              "",
+              "Ímolo ver en acción..."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Aquí temos dúas ramas novamente; decátate de que a rama `bugFix` está seleccionada (olla ó asterisco)",
+              "",
+              "Queremos mover o noso traballo do `bugFix` directamente dentro da rama `master`. Desta forma, vai parecer que eses dous recursos foron editados secuencialmente, cando a realidade é que se fixeron en paralelo.",
+              "",
+              "Imos lanzar o comando `git rebase`"
+            ],
+            "afterMarkdowns": [
+              "¡Buah chorvo! Agora o traballo da nosa rama `bugFix` está seguida de master, e temos unha fermosa línea de commits.",
+              "",
+              "Percibe que o commit `C3` aínda existe nalgún lugar (el está borrado na árbore), e que `C3'` é a \"copia\" que rebasamos en master.",
+              "",
+              "O único problema é que a rama master non foi actualizada tamén, ímolo facer agora..."
+            ],
+            "command": "git rebase master",
+            "beforeCommand": "git commit; git checkout -b bugFix C1; git commit"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Agora a rama `master` está ativa. Continuamos facendo o rebase na `bugFix`..."
+            ],
+            "afterMarkdowns": [
+              "¡Xa está! Como `master` era um ancestro de `bugFix`, git simplemente moveu a referencia da rama `master` máis adiante na historia."
+            ],
+            "command": "git rebase bugFix",
+            "beforeCommand": "git commit; git checkout -b bugFix C1; git commit; git rebase master; git checkout master"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Para completar este nivel, fai o seguinte",
+              "",
+              "* Fai checkout de un novo branch chamado `bugFix`",
+              "* Fai un commit",
+              "* Regresa a master e fai un commit novamente",
+              "* Móvete á rama bugFix outra vez e fai rebase sobre master",
               "",
               "Boa sorte!"
             ]
@@ -50853,6 +51678,7 @@ exports.level = {
     "ja"   : "Git Describe",
     "es_AR": "Git Describe",
     "pt_BR": "Git Describe",
+    "gl"   : "Git Describe",
     "zh_TW": "git describe",
     "zh_CN": "Git Describe",
     "ru_RU": "Git describe",
@@ -50866,6 +51692,7 @@ exports.level = {
     "ja"   : "次に進む準備が整ったなら、bugFixに対して一回commitしてください",
     "es_AR": "Simplemente commiteá una vez en bugFix cuando estés listo para seguir",
     "pt_BR": "Simplesmente commite uma vez em bugFix quando quiser parar de experimentar",
+    "gl"   : "Simplemente fai commit en bugFix cando estés listo para continuar.",
     "zh_TW": "當你要移動的時候，只要在 bugFix 上面 commit 就好了",
     "zh_CN": "当你准备好时，在 bugFix 分支上面提交一次就可以了",
     "ru_RU": "Когда закончишь, просто сделай commit",
@@ -51253,6 +52080,69 @@ exports.level = {
         }
       ]
     },
+    "gl" : {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "### Git Describe",
+              "",
+              "Como as tags fan a función de \"áncora\" no repositorio, Git ten un comando para *describir* ónde podes estar ti en relación á \"áncora\" (tag) máis próxima. Ese comando chámase `git describe`!",
+              "",
+              "Git describe pode axudar a recuperar a túa posición despois de mover moitos commits para atrás ou para adiante na historia; esto pode suceder depois de que fagas un git bisect (unha búsqueda para atopar erros) ou cando te sentas no ordenador dun colega que chegou das vacacións."
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Git describe lánzase do seguinte xeito:",
+              "",
+              "`git describe <ref>`",
+              "",
+              "Onde `<ref>` é qualquera cousa que git poida resolver como unha referencia a un commit. Se non especificas a ref, git usará o commit actual no que se esté traballando (`HEAD`).",
+              "",
+              "A resposta do comando é algo semellante a esto:",
+              "",
+              "`<tag>_<numCommits>_g<hash>`",
+              "",
+              "Onde `tag` é a tag anterior máis próxima na historia, `numCommits` é o número de commits de distancia ó tag, e `<hash>` é o hash do commit no que estamos."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Vexamos un exemplo rápido. Para a árbore de abaixo:"
+            ],
+            "afterMarkdowns": [
+              "O comando `git describe master` daría a saída:",
+              "",
+              "`v1_2_gC2`",
+              "",
+              "Mentres que `git describe side` daría:",
+              "",
+              "`v2_1_gC4`"
+            ],
+            "command": "git tag v2 C3",
+            "beforeCommand": "git commit; go -b side HEAD~1; gc; gc; git tag v1 C0"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "¡Básicamente é iso do que trata git describe! Intenta descubrir algúns locais da árbore para sentir como se comporta o comando.",
+              "",
+              "Cando estés listo, fai un commit para que o nivel remate. Esa é a gracia."
+            ]
+          }
+        }
+      ]
+    },
     "de_DE": {
       "childViews": [
         {
@@ -51596,6 +52486,7 @@ exports.level = {
     "de_DE": "Einen Commit pflücken",
     "es_AR": "Tomando un único commit",
     "pt_BR": "Pegando um único commit",
+    "gl"   : "Escollendo un único commit",
     "ja": "一つのコミットのみを取得",
     "zh_CN": "只取一个提交记录",
     "zh_TW": "只取一個 commit",
@@ -51608,6 +52499,7 @@ exports.level = {
     "fr_FR": "Souvenez-vous, les rebases interactifs ou cherry-pick sont vos amis ici.",
     "es_AR": "Acordate, el rebase interactivo o cherry-pick son tus amigos acá",
     "pt_BR": "Lembre-se, o rebase interativo ou o cherry-pick são seus amigos aqui",
+    "gl"   : "Recorda, o rebase interativo ou cherry-pick é un dos teus colegas aquí",
     "ja": "このレベルではインタラクティブモードのrebaseやcherry-pickがクリアのカギです",
     "ko": "대화식 리베이스(rebase -i)나 or 체리픽(cherry-pick)을 사용하세요",
     "zh_CN": "你有两个朋友，cherry-pick 和 rebase -i",
@@ -51765,6 +52657,45 @@ exports.level = {
           "options": {
             "markdowns": [
               "Este é um nível avançado, então vamos deixar para você a decisão de qual comando usar, mas para completar este nível, certifique-se de que o `master` receba o commit referenciado por `bugFix`."
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Commits apilados localmente",
+              "",
+              "Aquí estamos nunha situación que acontece de cotio con desenvolvedores: Estou intentando atopar un erro, mais é escorredizo. Para axudar ó meu traballo de detective, eu coloco algúns comandos de debug e prints.",
+              "",
+              "¡Todos esos comandos de debug e mensaxes están nas súas ramas propias. Finalmente eu atopo o erro, arránxoo e reorganizo!",
+              "",
+              "O único problema é que agora eu preciso devolver o meu `bugFix` á rama `master`. Se eu fixera simplemente un fast-forward en `master`, entón o `master` rematará contendo tódolos comandos de debug, o que é indesexable. Debe existir algunha outra forma..."
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Precisamos decirlle a git que copie só os commits que nos interesa. Esta situación é exatamente a mesma dos niveis anteriores respecto de como mover o traballo -- podemos usar os mesmos comandos:",
+              "",
+              "* `git rebase -i`",
+              "* `git cherry-pick`",
+              "",
+              "Para acadar o objetivo."
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Este é un nivel avanzado, entón imos deixarche a decisión de qué comando empregar, pero para completar este nivel, asegurate de que a rama `master` colla o commit referenciado por `bugFix`."
             ]
           }
         }
@@ -52075,6 +53006,7 @@ exports.level = {
     "fr_FR": "Jongler avec les commits",
     "es_AR": "Haciendo malabares con los commits",
     "pt_BR": "Malabarismo com commits",
+    "gl"   : "Argallando cos commits",
     "ja": "コミットをやりくりする",
     "zh_CN": "提交的技巧 #1",
     "zh_TW": "commit 的戲法",
@@ -52087,6 +53019,7 @@ exports.level = {
     "fr_FR": "La première commande est git rebase -i HEAD~2",
     "es_AR": "El primer comando es git rebase -i HEAD~2",
     "pt_BR": "O primeiro comando é git rebase -i HEAD~2",
+    "gl"   : "O primeiro comando é git rebase -i HEAD~2",
     "ja": "最初に打つコマンドはgit rebase -i HEAD~2",
     "ko": "첫번째 명령은 git rebase -i HEAD~2 입니다",
     "zh_CN": "第一个命令是 `git rebase -i HEAD~2`",
@@ -52229,6 +53162,41 @@ exports.level = {
               "Por último, preste atenção no estado do \"objetivo\" aqui -- como nós movemos os commits duas vezes, ambos ficam com um apóstrofo. Um apóstrofo adicional é colocado no commit que sofreu o \"amend\", o que nos dá a forma final da árvore ",
               "",
               "Tendo dito isto, posso avaliar a resposta baseado na estrutura e nas diferenças relativas de número de apóstrofos. Desde que o ramo `master` da sua árvore tenha a mesma estrutura, e o número de apóstrofos seja igual a menos de uma constante, darei a você todos os pontos para esta tarefa"
+            ]
+          }
+        },
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Argallando cos commits",
+              "",
+              "Aquí está outra situación que acontece con bastante frecuencia. Estás facendo algúns cambios (`newImage`), separado do resto de cambios (`caption`) que están relacionados, deste xeito están apilados un enriba do outro no teu repositorio.",
+              "",
+              "O complicado é que ás veces, poida que precises facer unha pequena nota nun commit máis antigo. Neste caso, a persoa de deseño quere mudar un pouco as dimensións da imaxe introducida en `newImage`, a pesar de que ese commit está máis abaixo no noso histórico!!"
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Superamos este problema facendo o seguinte:",
+              "",
+              "* Reordenaremos os commits seleccionando aqueles que desexamos que estén no cambio, con `git rebase -i`",
+              "* Empregaremos o comando `git commit --amend` para facer unha pequena modificación",
+              "* Imos, entón, reordear os commits na mesma orde na que estaban anteriormente con `git rebase -i`",
+              "* Finalmente, moveremos o master para esa parte atualizada da árbore e así finalizar o nivel (usando o método que máis che pete)",
+              "",
+              "Hai moitas formas de obter o obxectivo final (eu vexo o cherry-pick pasando pola túa cachola), e verémolo máis adiante, pero agora ímonos centrar nesta técnica.",
+              "",
+              "Por último, preste atención no estado do \"objectivo\" aquí -- como movemos os commits dúas veces, ambos teñen o apóstrofo sumado. O apóstrofo engádese polo commit que nos correximos (amend), o cal danos a forma final da árbore.",
+              "",
+              "Contado todo esto, a resposta valídase baseándose na estructura e nos diferentes apóstrofes. Cando a rama `master` teña a mesma estructura, e o número de apóstrofos sexa igual, obterás todos os puntos da tarefa."
             ]
           }
         },
@@ -52499,6 +53467,7 @@ exports.level = {
     "fr_FR": "Jongler avec les commits #2",
     "es_AR": "Haciendo malabares con los commits #2",
     "pt_BR": "Malabarismo com commits #2",
+    "gl"   : "Argallando cos commits #2",
     "de_DE": "Jonglieren mit Commits Teil 2",
     "ja": "コミットをやりくりする その2",
     "zh_CN": "提交的技巧 #2",
@@ -52511,6 +53480,7 @@ exports.level = {
     "fr_FR": "N'oubliez pas d'appliquer les changements depuis la branche master",
     "es_AR": "¡No te olvides de avanzar master a los cambios actualizados!",
     "pt_BR": "Não se esqueça de avançar a referência do master para as mudanças efetuadas!",
+    "gl"   : "¡Non te esquezas de avanzar master ós cambios actualizados!",
     "de_DE": "Vergiss nicht den master auf die aktuelle Version vorzuspulen",
     "ja": "masterのポインタを先に進めることを忘れずに！",
     "ko": "master를 변경 완료한 커밋으로 이동(forward)시키는 것을 잊지 마세요!",
@@ -52687,6 +53657,49 @@ exports.level = {
               "Então, neste nível, vamos alcançar o mesmo objetivo de fazer \"amend\" no `C2`, mas evitaremos usar o `rebase -i`. Agora vou deixar com você a tarefa de descobrir como fazer! :D",
               "",
               "Lembre-se, o número exato de apóstrofos (') nos commits não é importante, apenas as diferenças relativas. Por exemplo, darei todos os pontos nesta tarefa se você obtiver o mesmo resultado da árvore da visualização de objetivo com um apóstrofo extra em todos os commits"
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Argallando cos commits #2",
+              "",
+              "*No caso de non ter rematado o tema anterior (Argallando cos commits #1), por favor faino antes de continuar*.",
+              "",
+              "Como puideches ver no anterior tema, usamos `rebase -i` para reordear os commits. Unha vez que atopamos o commit que queriamos modificar, puidemos empregar sinxelamente o `--amend`, e depois reordenalo de volta para obter a nosa orde preferida.",
+              "",
+              "O único problema aquí é que hai moita reordenación ocorrendo, o que pode introducir conflitos no rebase. Imos votar unha ollada a outro método, o uso de `git cherry-pick`"
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Lembra que `git cherry-pick` copiará un commit de qualquera lugar na árbore enriba do HEAD (sempre e cando non sexa ancestro do HEAD).",
+              "",
+              "Aquí está unha demostración para que refresques a memoria:"
+            ],
+            "afterMarkdowns": [
+              "¡A tope! Seguimos."
+            ],
+            "command": "git cherry-pick C2",
+            "beforeCommand": "git checkout -b bugFix; git commit; git checkout master; git commit"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Entón, neste nivel, imos completar o mesmo obxectivo que facendo \"amend\" no `C2`, pero evitando facer o `rebase -i`. Agora deixámoste que lle des os miolos para sacar o exercicio! :D",
+              "",
+              "Recorda, o número exacto de apóstrofos (') nos commits non é importante, só as diferencias relativas. Por exemplo, levarás todos os puntos desta tarefa se obtés o mesmo resultado da árbore que se mostra na visualización do exercicio con un apóstrofo extra en tódolos commits."
             ]
           }
         }
@@ -53001,6 +54014,7 @@ exports.level = {
     "ja"   : "Gitのタグ",
     "es_AR": "Tags en git",
     "pt_BR": "Tags no Git",
+    "gl"   : "Etiquetas en git",
     "fr_FR": "Git Tags",
     "zh_CN": "Git Tag",
     "zh_TW": "git tag",
@@ -53015,6 +54029,7 @@ exports.level = {
     "ja"   : "コミットを直接チェックアウトできますが、簡単にタグでチェックアウトすることも可能!",
     "es_AR": "Podés checkoutear directamente el commit, ¡o simplemente el tag!",
     "pt_BR": "Você pode fazer checkout diretamente no commit ou na tag correspondente!",
+    "gl"   : "Podes saltar directamente ó commit, ¡ou a etiqueta, que é máis doado!",
     "zh_TW": "你可以直接 checkout 到 commit 上，或是簡單的 checkout 到 tag 上",
     "zh_CN": "你可以直接 checkout 到 commit 上，或是简单地 checkout 到 tag 上",
     "ru_RU": "Можно сделать checkout напрямую на коммит или же на тег",
@@ -53334,6 +54349,58 @@ exports.level = {
         }
       ]
     },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Etiquetas en Git",
+              "",
+              "Como aprendiches nas leccións previas, as ramas pódense mover sinxelamente, e xeralmente refírense a distintos commits según vas completando o código. As ramas mutan con facilidade, soen ser temporais, e sempre cambiantes.",
+              "",
+              "Se estamos nese caso, podes preguntarte se existe unha forma de marcar *permanentemente* puntos históricos no proxecto. Para cousas como grandes entregas ou grandes merges, ¿existe algunha forma de marcar commits con algo máis permanente que unha rama?",
+              ""
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Acertaches seguro, ¡si que existe! As etiquetas de git foron creadas para ese propósito -- elas marcan de forma (relativamente) permanente algún commits coma se fosen \"marcos das fincas\" (\"milestones\") nun campeiro, e podes facer referencias a elas mellor que o catastro.",
+              "",
+              "É moi importante saber que, as etiquetas non avanzan cando se crean novos commits. Non podes facer \"checkout\" nun tag e completar o traballo de esa etiqueta cun commit amend ou rebasándoo -- as etiquetas existen como áncoras na árbore de commits que están pegadas a certos puntos.",
+              "",
+              "Vexamos como se comportan as etiquetas na práctica."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Creamos un tag na rama `C1`, que é o noso prototipo da versión 1"
+            ],
+            "afterMarkdowns": [
+              "¡Ahí o tes!. Sinxelo. Nomeamos a etiqueta de `v1` e referenciamos o commit `C1` explícitamente. Se non indicas o commit, git vai empregar o commit onde está situado o `HEAD`."
+            ],
+            "command": "git tag v1 C1",
+            "beforeCommand": "git commit"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Para completar esta tarefa, crea as etiquetas amosadas na visualización do obxectivo, e entón fai checkout en `v1`. Mira que terminas no estado \"Detached HEAD\" -- eso é porque non podes facer commit directamente na etiqueta `v1`.",
+              "",
+              "No próximo nivel, examinaremos un caso de uso máis interesante para as etiquetas."
+            ]
+          }
+        }
+      ]
+    },
     "de_DE": {
       "childViews": [
         {
@@ -53613,6 +54680,7 @@ exports.level = {
     "ja"   : "cherry-pick入門",
     "es_AR": "Introducción a cherry-pick",
     "pt_BR": "Introdução ao cherry-pick",
+    "gl"   : "Introuducción a cherry-pick",
     "zh_CN": "Git Cherry-pick",
     "zh_TW": "介紹 cherry-pick",
     "ru_RU": "Введение в Cherry-pick",
@@ -53626,6 +54694,7 @@ exports.level = {
     "ja"   : "git cherry-pickの後にコミット名を追加",
     "es_AR": "git cherry-pick seguido de los nombres de los commits",
     "pt_BR": "git cherry-pick seguido dos nomes dos commits",
+    "gl"   : "git cherry-pick seguido das referencias a commits",
     "zh_CN": "git cherry-pick 后面要跟提交的名字",
     "zh_TW": "git cherry-pick 後面要接著 commit 的名稱",
     "ru_RU": "git cherry-pick основывается на именах коммитов!",
@@ -53771,7 +54840,7 @@ exports.level = {
               "",
               "El primer comando en esta serie se llama `git cherry-pick`. Tiene la siguiente forma:",
               "",
-              "* `git cherry-pick <Commit1> <Commit2> <...>`",
+              " `git cherry-pick <Commit1> <Commit2> <...>`",
               "",
               "Es una manera bastante directa de decir que querés copiar una serie de commits sobre tu ubicación actual (`HEAD`). Personalmente amo `cherry-pick` porque hay muy poca magia involucrada y es bastante simple de entender.",
               "",
@@ -53810,7 +54879,7 @@ exports.level = {
           "type": "ModalAlert",
           "options": {
             "markdowns": [
-              "## Movendo trabalho por aí",
+              "## Movendo o trabalho por aí",
               "",
               "Por enquanto nós abordamos o básico do Git -- commitar, criar ramos, e mover-se pela árvore. Apenas esses conceitos já são suficientes para utilizar 90% do poder dos repositórios Git, e cobrem as principais necessidades dos desenvolvedores.",
               "",
@@ -53855,6 +54924,63 @@ exports.level = {
           "options": {
             "markdowns": [
               "Para completar este nível, simplesmente copie algum trabalho dos outros três ramos para o master. Você pode ver quais commits queremos copiar na visualização do objetivo.",
+              ""
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Movendo traballo por ahí",
+              "",
+              "Ata agora cubrimos o uso básico de git -- facer commit, crear ramas, e moverse pola árbore. Estes conceptos chegan para aproveitar o 90% do poder dos repositorios de git e cubrilas necesidades principais dos desenvolvedores.",
+              "",
+              "O 10% restante, ademáis, poden ser extremadamente útiles nos fluxos de traballo complexos (ou cando te meteches nalgún problema complicado). O próximo concepto que imos abordar é \"movendo o traballo por ahí\" -- noutras verbas, unha forma que teñen os desenvolvedores de dicir \"eu quero este traballo aquí, e aquel alí\" de forma precisa, elocuente e flexible.",
+              "",
+              "Eso pode ser moito, pero os conceptos son simples."
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Git Cherry-pick",
+              "",
+              "O primeiro comando desta serie é `git cherry-pick`. O comando emprégase da seguinte forma:",
+              "",
+              "* `git cherry-pick <Commit1> <Commit2> <...>`",
+              "",
+              "Trátase dunha forma bastante directa de dicir que queres copiar unha serie de commits sobre a túa ubicación actual (`HEAD`). Eu persoalmente adoro `cherry-pick` porque hai moita maxia envolta e é  un funcionamento sinxelo de entender.",
+              "",
+              "Vexamos unha demostración!",
+              ""
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Aquí está un repositorio onde hai algún traballo na rama `side` que desexamos copiar para a rama `master`. Iso podería ser obtido por medio dun rebase (que xa aprendemos), pero imos ver como o resolve cherry-pick."
+            ],
+            "afterMarkdowns": [
+              "¡Eso é! Queríamos os commits `C2` e `C4` e git insertounos por baixo de nós. ¡Moi sinxelo!"
+            ],
+            "command": "git cherry-pick C2 C4",
+            "beforeCommand": "git checkout -b side; git commit; git commit; git commit; git checkout master; git commit;"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Para completar este nivel, copia algo de traballo das outras ramas na master. Podes ver qué commits queremos copiar na visualización do obxectivo.",
               ""
             ]
           }
@@ -54271,6 +55397,7 @@ exports.level = {
     "en_US": "Detach yo' HEAD",
     "es_AR": "Desatacheá tu HEAD",
     "pt_BR": "Solte a sua cabeça",
+    "gl"   : "Abandona o teu HEAD",
     "fr_FR": "Détacher votre HEAD",
     "zh_CN": "分离 HEAD",
     "zh_TW": "分離 HEAD",
@@ -54284,6 +55411,7 @@ exports.level = {
     "en_US": "Use the label (hash) on the commit for help!",
     "es_AR": "¡Usá la etiqueta (hash) sobre el commit para ayudarte!",
     "pt_BR": "Use o identificador (hash) sobre o commit para te ajudar!",
+    "gl"   : "¡Usa a etiqueta (hash) sobre o commit para axudarte!",
     "de_DE": "Benutze den Bezeichner (den Hash) des Commits.",
     "ja"   : "コミットのラベル（hash）を使用",
     "fr_FR": "Utilisez le label (identifiant) du commit pour aider !",
@@ -54523,6 +55651,84 @@ exports.level = {
               "Para completar este nível, vamos soltar o HEAD do `bugFix` e em vez disso anexá-lo ao commit.",
               "",
               "Especifique o commit por meio do hash correspondente. O hash de cada commit é mostrado dentro do círculo que representa o commit (a letra C seguida de um número)."
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Movéndose en Git",
+              "",
+              "Antes de seguir con algunhas das funcionalidades máis avanzadas de Git, é importante entender as diferentes formas de se mover a través da árbore de commits que representa o teu proxecto.",
+              "",
+              "¡Unha vez que te sintas ben ó teu redor, os teus poderes empregando outros comandos de git serán amplificados!",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## HEAD",
+              "",
+              "Primeiro temos que falar sobre o \"commit actual\" (\"HEAD\"). HEAD é un nome simbólico para o commit atualmente ativo (o último checkout que se fixo) -- é esencialmente o commit sobre o cal estás traballando nese momento.",
+              "",
+              "O HEAD sempre apunta para o commit máis recentemente copiado sobre a árbore de traballo (arquivos do proxecto). A maioría dos comandos de git que fan algún cambio sobre a árbore de traballo empezarán movendo o HEAD.",
+              "",
+              "Normalmente o HEAD apunta para o nome dunha rama (por exemplo, bugFix). Quando fagas commit, o status do bugFix é alterado e ese cambio ocorre tamén sobre o HEAD."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Vexamos isto en acción. Aquí imos mostrar o HEAD antes e depois dun commit."
+            ],
+            "afterMarkdowns": [
+              "Ves! O HEAD estivo ó lado do noso `master` todo este tempo."
+            ],
+            "command": "git checkout C1; git checkout master; git commit; git checkout C2",
+            "beforeCommand": ""
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "### Soltando a cabeza",
+              "",
+              "Soltar o HEAD significa apuntar a un commit en vez de apuntar a unha rama. Antes do estado solo (\"detached\"), é así como aparece:",
+              "",
+              "HEAD -> master -> C1",
+              ""
+            ],
+            "afterMarkdowns": [
+              "E agora é",
+              "",
+              "HEAD -> C1"
+            ],
+            "command": "git checkout C1",
+            "beforeCommand": ""
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Para completar este nivel, imos soltar o HEAD de `bugFix` e en vez diso apuntamos ó commit.",
+              "",
+              "Especifica o commit por medio do hash correspondente. O hash de cada commit está dentro do círculo que representa ó commit (a letra C seguida dun número)."
             ]
           }
         }
@@ -55164,6 +56370,7 @@ exports.level = {
     "en_US": "you can use either branches or relative refs (HEAD~) to specify the rebase target",
     "es_AR": "podés usar tanto ramas como referencias relativas (HEAD~) para especificar el objetivo del rebase",
     "pt_BR": "Você pode usar ou ramos ou referências relativas (HEAD~) para especificar o alvo do rebase",
+    "gl"   : "Podes usar ramas ou referencias relativas (HEAD~) para especificar o obxectivo do rebase",
     "de_DE": "Du kannst entweder Branches oder relative Ref-Angaben (z.B. HEAD~) benutzen, um das Ziel des Rebase anzugeben.",
     "fr_FR": "Vous pouvez utiliser soit les branches, soit les références relatives (HEAD~) pour spécifier la cible à rebaser",
     "zh_CN": "branch 或者是相对位置（HEAD~）都可以用來指定 rebase 的目标",
@@ -55177,6 +56384,7 @@ exports.level = {
     "en_US": "Interactive Rebase Intro",
     "es_AR": "Introducción al rebase interactivo",
     "pt_BR": "Introdução ao rebase interativo",
+    "gl"   : "Introducción ó rebase interativo",
     "de_DE": "Einführung Interactive Rebase",
     "ja"   : "インタラクティブrebase入門",
     "fr_FR": "Introduction à rebase",
@@ -55577,6 +56785,71 @@ exports.level = {
         }
       ]
     },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Rebase Interativo en Git",
+              "",
+              "Empregar cherry-pick é xenial cando coñeces qué commits queres (_e_ coñeces os seus códigos hash) -- é difícil mellorar a súa simplicidade.",
+              "",
+              "Pero ¿qué pasa cando non sabes qué commits son os que queres? Por sorte, ¡git cúbrete nesta situación tamén! Podemos empregar o rebase interactivo para esto -- é a mellor forma de revisar unha serie de commits que estás a rebasar.",
+              "",
+              "Mergullémonos nos detalles..."
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "O rebase interativo é o comando `rebase` coa opción `-i`.",
+              "",
+              "Se ti inclúes esta opción, o git abrirá unha interfaz para mostrar qué commits están hábiles para ser copiados sobre o obxectivo do rebase. Tamén amosa os seus códigos hash e mensaxes dos commits, o cal axuda moito para saber qué é cada commit.",
+              "",
+              "En git \"de verdade\", a interfaz significa abrir un arquivo de texto nun editor (por exemplo `vim`). Para os nosos propósitos, aquí aparecerá unha pequena ventá que se comporta do mesmo xeito."
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Cando a xanela de rebase interativo abra, poderás facer 3 cousas distintas:",
+              "",
+              "* Podes reordenar os commits simplemente cambiando a súa orde na interface (na nosa ventá significa arrastrar e soltar os commits).",
+              "* Podes escoller a opción de omitir algúns commits. Para iso, pincha no botón `pick` -- deixar o `pick` desligado significa que queres descartar o commit.",
+              "* Ademáis, ti podes \"esmagar\" (fazer squash) nos commits. Tristemente, este tutorial non será capaz de cubrir esa funcionalidade por algúns motivos loxísticos, entón imos pulir algúns detalles ó respecto. Resumindo, o squash permite combinar commits.",
+              "",
+              "¡Xenial! Vexamos un exemplo."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Cando pinches o botón, unha ventá de rebase interativo abrirase. Reordena algúns commits da forma que ti prefieras (ou se o prefires desmarca o `pick` de algúns) e mira o seu resultado!"
+            ],
+            "afterMarkdowns": [
+              "¡Veña! Git copiou algúns commits exatamente da mesma forma que o indicaches na ventá"
+            ],
+            "command": "git rebase -i HEAD~4 --aboveAll",
+            "beforeCommand": "git commit; git commit; git commit; git commit"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Para finalizar este nivel, fai un rebase interativo e obteñaa a orde amosada na visualización do obxectivo. Lembra que podes usar os comandos `undo` ou `reset` para correxir erros :D"
+            ]
+          }
+        }
+      ]
+    },
     "de_DE": {
       "childViews": [
         {
@@ -55918,6 +57191,7 @@ exports.level = {
     "zh_TW": "相對引用（^）",
     "es_AR": "Referencias relativas (^)",
     "pt_BR": "Referências relativas (^)",
+    "gl"   : "Referencias relativas (^)",
     "de_DE": "Relative Referenzen (^)",
     "ru_RU": "Относительные ссылки (^)",
     "ko"   : "상대 참조 (^) (Relative Refs)",
@@ -55930,6 +57204,7 @@ exports.level = {
     "de_DE": "Denk an den Dach-Operator (^)!",
     "es_AR": "¡No te olvides del operador ^!",
     "pt_BR": "Não se esqueça do operador circunflexo (^)",
+    "gl"   : "Non se esqueza do operador circunflexo (^)",
     "zh_CN": "记住操作符（^）！",
     "zh_TW": "不要忘記插入（^）符號！",
     "ru_RU": "Не забудь оператор `^`",
@@ -56307,6 +57582,81 @@ exports.level = {
               "Para completar esse nível, faça checkout do commit pai de `bugFix`. Isso soltará o `HEAD`.",
               "",
               "Você pode especificar o hash se quiser, mas tente usar referências relativas em vez disso!"
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Referencias relativas",
+              "",
+              "Moverse por a árbore de git usando os códigos hash dos commits pode volverse un pouco tedioso. Neste mundo real non vas ter unha visualización dos commits tan bonita no terminal, así que vas ter que usar `git log` para ver cada código hash.",
+              "",
+              "Inda peor, os códigos hash són xeralmente moito máis grandes no mundo real. Por exemplo, o hash do commit que introduxemos no nivel anterior é `fed2da64c0efc5293610bdd892f82a58e8cbc5d8`. Non é algo sinxelo de lembrar.",
+              "",
+              "O bo é que git aínda afina cos hashes. El só precisa que expecifiques a cantidade mínima de caracteres suficientes para identificar unívocamente ó commit. Entón eu podo escribir `fed2` e non o hash completo."
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Como xa dixemos, indicar os commits polo seu código hash non é a forma máis convinte, e é por eso que git ten referencias relativas. ¡Son a caña!",
+              "",
+              "Cas referencias relativas, podes comezar por un punto sinxelo de lembrar (como a rama `bugFix` ou o `HEAD`) e referenciar a partir de ahí.",
+              "",
+              "Os commits relativos son poderosos, pero agora imos presentar só dous formas sinxelas:",
+              "",
+              "* Moverse un commit por riba con `^`",
+              "* Mover unha cantidade de commits atrás con `~<num>`"
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Votémoslle unha ollada o operador (^) primeiro. Cada vez que o engadimos a unha referencia, estaslle dicindo a commit que queres o pai de esa referencia.",
+              "",
+              "Entón, dicir `master^` é equivalente a \"o primeiro pai do `master`\".",
+              "",
+              "`master^^` é o avó (ancestral de segunda xeración) do `master`",
+              "",
+              "Imos facer checkout do commit que está enriba de master"
+            ],
+            "afterMarkdowns": [
+              "Boom! Ahí o tes. Moito máis rápido que por o hash do commit"
+            ],
+            "command": "git checkout master^",
+            "beforeCommand": "git commit"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Tamén podes usar o `HEAD` como parte dunha referencia relativa. Ímolo utilizar para nos mover uns commits cara arriba na árbore."
+            ],
+            "afterMarkdowns": [
+              "¡Chupado! Podemos viaxar cara atrás no tempo con `HEAD^`"
+            ],
+            "command": "git checkout C3; git checkout HEAD^; git checkout HEAD^; git checkout HEAD^",
+            "beforeCommand": "git commit; git commit"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Para completar este nivel, fai checkout do commit pai de `bugFix`. Iso soltará o `HEAD`.",
+              "",
+              "¡Podes indicar o hash que queiras, pero intenta empregar as referencias relativas, é moito mellor!"
             ]
           }
         }
@@ -56777,6 +58127,7 @@ exports.level = {
     "zh_TW": "這一關至少要用到一次直接參考（hash）",
     "es_AR": "Vas a necesitar usar al menos una referencia directa (hash) para completar este nivel",
     "pt_BR": "Você precisará usar pelo menos uma referência direta (hash) para completar este nível",
+    "gl"   : "Precisarás usar polo menos unha referencia directa (hash) para completar este nivel",
     "de_DE": "Du musst mindestens einen Hash benutzen, um dieses Level zu schaffen",
     "ja"   : "このレベルをクリアするには少なくとも一つの直接リファレンス（hash）を使用する必要があります",
     "ru_RU": "Понадобится использовать как минимум одну прямую ссылку (хеш), чтобы пройти этот уровень",
@@ -56789,6 +58140,7 @@ exports.level = {
     "ja"   : "相対リファレンス　その２ (~)",
     "es_AR": "Referencias relativas #2 (~)",
     "pt_BR": "Referências relativas #2 (~)",
+    "gl"   : "Referencias relativas #2 (~)",
     "fr_FR": "Références relatives #2 (~)",
     "zh_CN": "相对引用2（~）",
     "zh_TW": "相對引用二（~）",
@@ -56999,6 +58351,75 @@ exports.level = {
               "Agora que você viu referências relativas e movimentação de ramos combinadas, vamos usá-las para resolver o próximo nível.",
               "",
               "Para completar este nível, mova o `HEAD` e os ramos `master` e `bugFix` para os destinos mostrados no objetivo."
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "### O operador \"~\"",
+              "",
+              "Digamos que queres moverte un montón de commits cara atrás nunha árbore de git. Sería moi tedioso escribir `^` moitas veces, e por iso que git tamén ten o operador (`~`).",
+              "",
+              "",
+              "Pódeselle pasar un número (opcionalmente) despois da tilde, especificando o número de commits que se quere mover cara atrás. Mira como é en acción."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Imos especificar un número de commits cara atrás con `~`."
+            ],
+            "afterMarkdowns": [
+              "¡Veeeña! Ben apuntado -- as referencias relativas son a leche."
+            ],
+            "command": "git checkout HEAD~4",
+            "beforeCommand": "git commit; git commit; git commit"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "### Forzando as ramas",
+              "",
+              "Agora que eres un especialista en referencias relativas, imos *usalas* para algunha cousiña.",
+              "",
+              "Un dos usos máis comúns para o uso das referencias relativas é para movelas ramas de lugar. Ti podes reasignar directamente unha rama a un commit usando a opción `-f`. Así que con algo coma:",
+              "",
+              "`git branch -f master HEAD~3`",
+              "",
+              "Move (de forma forzosa) a rama master 3 commits enriba do HEAD."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Vexamos o comando anterior en acción"
+            ],
+            "afterMarkdowns": [
+              "¡Agora é o a nosa quenda! As referencias relativas nos darán unha forma concisa de nos referír a `C1`, e forzar a rama (con `-f`) deunos unha forma rápida de movela rama `master` a esa posición."
+            ],
+            "command": "git branch -f master HEAD~3",
+            "beforeCommand": "git commit; git commit; git commit; git checkout -b bugFix"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Xa viches as referencias relativas e o movemento de ramas combinadas, ímolas usar para resolver o próximo exercicio.",
+              "",
+              "Para completar este nivel, mova o `HEAD` e as ramas `master` e `bugFix` para os destinos mostrados no obxectivo."
             ]
           }
         }
@@ -57555,7 +58976,8 @@ exports.level = {
     "fr_FR": "Annuler des changements avec Git",
     "es_AR": "Revirtiendo cambios en git",
     "pt_BR": "Revertendo mudanças no Git",
-    "ko": "Git에서 작업 되돌리기",
+    "gl"   : "Revertindo cambios en git",
+    "ko"   : "Git에서 작업 되돌리기",
     "zh_CN": "撤销变更",
     "zh_TW": "在 git 中取消修改 ",
     "ru_RU": "Отмена изменений в Git",
@@ -57567,6 +58989,7 @@ exports.level = {
     "fr_FR": "Notez que `revert` et `reset` n'ont pas les mêmes arguments.",
     "es_AR": "Notá que revert y reset toman parámetros distintos",
     "pt_BR": "Lembre que revert e reset recebem parâmetros diferentes",
+    "gl"   : "Lembra que revert e reset usan parámetros distintos",
     "zh_CN": "注意 revert 和 reset 使用的参数不同。",
     "zh_TW": "注意 revert 和 reset 使用不同的參數。",
     "ko": "revert와 reset이 받는 인자가 다름을 기억하세요",
@@ -57759,6 +59182,69 @@ exports.level = {
               "Para completar este nível, reverta os dois commits mais recentes tanto em `local` como em `pushed`.",
               "",
               "Tenha em mente que `pushed` é um ramo remoto, e `local` é um ramo local -- isso deve ajudá-lo a escolher o método apropriado."
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Revertindo cambios en Git",
+              "",
+              "Existen varias formas de revertir os cambios en git. E, como cando se fai commit, desfacer cambios supon unha operación de baixo nivel (a indexación de arquivos ou trozos de eles) e unha operación de alto nivel (desfacer os cambios xa aplicados). Aquí ímonos enfocar neste último punto.",
+              "",
+              "Hai dúas formas de desfacer os cambios en git -- unha delas é `git reset`, e a outra é usando `git revert`. Imos comparalas na próxima ventá.",
+              ""
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "## Git Reset",
+              "",
+              "O comando `git reset` desfai os cambios movendo a referencia dunha rama cara un commit máis antigo na rama. Desta forma, podes pensar nesta operación como \"reescritura do histórico\"; o `git reset` vai movela rama cara atrás, como se ós commits nunca antes se fixeran.",
+              "",
+              "Vexamos o seu funcionamento:"
+            ],
+            "afterMarkdowns": [
+              "¡Bye bye! Git moveu a referencia da rama master cara atrás, ata o commit `C1`; agora o teu repositorio local está coma se o commit `C2` nunca acontecera."
+            ],
+            "command": "git reset HEAD~1",
+            "beforeCommand": "git commit"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "## Git Revert",
+              "",
+              "Mentres que resetear os cambios funciona xenial para as ramas locales na túa máquina, o método utilizado de \"reescribir o histórico\" non funciona con ramas remotas que outra xente usa.",
+              "",
+              "Para revervir os cambios e *compartir* eses cambios ca outra xente, precisamos usar `git revert`. Atende a cómo funciona"
+            ],
+            "afterMarkdowns": [
+              "Estrano, xurdíu un novo commit por baixo do commit que queriamos desfacer. Iso é porque o novo commit `C2'` engadíu *cambios* -- o que pasa é que o commit desfai exactamente os cambios feitos no commit `C2`.",
+              "",
+              "Con `revert`, ti podes facer `push` dos teus cambios para compartilos cos outros."
+            ],
+            "command": "git revert HEAD",
+            "beforeCommand": "git commit"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Para completar este nivel, reverte os dous commits máis recentes tanto en `local` como en `pushed`.",
+              "",
+              "Ten en mente que `pushed` é unha rama remota, e `local` é unha rama local -- Iso poida que te axude a aplicar o método apropriado."
             ]
           }
         }
@@ -58288,6 +59774,7 @@ exports.level = {
     "de_DE": "10000 Rebases unter dem `HEAD`",
     "es_AR": "Rebaseando más de 9000 veces",
     "pt_BR": "Fazendo mais de 9000 rebases",
+    "gl"   : "Facendo máis de 9000 rebases",
     "fr_FR": "Rebaser plus de 1000 fois",
     "ko": "9천번이 넘는 리베이스",
     "ja"   : "9000回以上のrebase",
@@ -58301,6 +59788,7 @@ exports.level = {
     "de_DE": "Nicht vergessen: die effizienteste Möglichkeit könnte sein, schließlich einfach nur den master zu aktualisieren ...",
     "es_AR": "Acordate, la manera más eficiente podría ser actualizar master sólo al final...",
     "pt_BR": "Lembre-se, a forma mais eficiente pode ser atualizar o master por último...",
+    "gl"   : "Lembra, a forma máis eficiente pode ser actualizar a rama master ó final...",
     "fr_FR": "Rappelez-vous, la façon la plus efficace peut être de mettre à jour master seulement à la fin ...",
     "ja"   : "最も効率的なやり方はmasterを最後に更新するだけかもしれない・・・",
     "ko": "아마도 master를 마지막에 업데이트하는 것이 가장 효율적인 방법일 것입니다...",
@@ -58359,6 +59847,24 @@ exports.level = {
               "No entanto, a cúpula da administração está tornando as coisas mais difíceis -- eles querem que os commits estejam todos em ordem sequencial. Isso significa que a nossa árvore final precisa ter o `C7'` por último, `C6'` acima disso, e assim por diante, tudo ordenado.",
               "",
               "Se você fizer besteira, sinta-se livre para usar o comando `reset` para recomeçar do zero. Depois lembre de olhar nossa solução do gabarito para ver se consegue resolver a tarefa usando menos comandos!"
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "### Fazendo rebase en múltiples ramas",
+              "",
+              "Neno, temos unha chea de ramas aquí! Imos facer rebase de todo o traballo contido nesas ramas para a master.",
+              "",
+              "A xente de administración estanos a facer as cousas complicadas, igual eles queren que os commits estén todos en orde secuencial. Isto significa que a nosa árbore final precisa ter `C7'` de último, `C6'` inda por riba, está por adiante, todo ordeado.",
+              "",
+              "Se te fas un lio polo camiño, síntete ceibe para usar o comando `reset` para comezar de cero outra vez. Despois lembra ollar a nosa solución para ver se consegues resolver a tarefa usando menos comandos!"
             ]
           }
         }
@@ -58527,6 +60033,7 @@ exports.level = {
     "de_DE": "Branch-Spaghetti",
     "es_AR": "Enslada de branches",
     "pt_BR": "Espaguete de ramos",
+    "gl"   : "Espaguete de ramas",
     "ja": "ブランチスパゲッティ",
     "zh_CN": "纠缠不清的分支",
     "zh_TW": "branch 漿糊",
@@ -58539,6 +60046,7 @@ exports.level = {
     "de_DE": "Stelle sicher, dass du alles in der richtigen Reihenfolge machst! Branche erst one, dann two, dann three.",
     "es_AR": "¡Asegurate de hacer las cosas en el orden correcto! Brancheá `one` primero, después `two`, y después `three`.",
     "pt_BR": "Certifique-se de fazer tudo na ordem correta! Crie o ramo `one` primeiro, depois `two`, depois `three`.",
+    "gl"   : "¡Afiánzate de facer as cousas no orde correcto! Crea ramas `one` de primeiras, e logo `two` e `three`.",
     "ja": "全て正しい順番で処理すること！oneが最初で、次がtwo、最後にthreeを片付ける。",
     "ko": "이 문제를 해결하는 방법은 여러가지가 있습니다! 체리픽(cherry-pick)이 가장 쉽지만 오래걸리는 방법이고, 리베이스(rebase -i)가 빠른 방법입니다",
     "zh_CN": "确保你是按照正确的顺序来操作！先操作分支 `one`, 然后 `two`, 最后才是 `three`",
@@ -58622,6 +60130,26 @@ exports.level = {
               "O ramo `one` precisa de uma reordenação e da exclusão do `C5`. O `two` precisa apenas de reordenação. O `three` precisa de um único commit!",
               "",
               "Vamos deixar você descobrir como resolver esta tarefa -- mas não deixe de ver a nossa solução depois com o comando `show solution`. "
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Espaguete de ramas",
+              "",
+              "¡Íscalle lura! Temos un _pequeno_ obxectivo que acadar neste nivel.",
+              "",
+              "Temos aquí un `master` que está algúns commits por detrás das ramas `one`, `two` e `three`. Por algunha razón, precisamos atualizar esas tres ramas con versións modificadas dos últimos commits de master.",
+              "",
+              "A rama `one` precisa de unha reordenación, e votar fora a `C5`. O `two` precisa apenas de reordenacións. O `three` precisa dun único commit!",
+              "",
+              "Ímoste deixar resolver o problema por ti mesmo -- pero non deixes de ver a nosa solución, para eso escrebe `show solution`. "
             ]
           }
         }
@@ -58781,6 +60309,7 @@ exports.level = {
     "ja"   : "Clone入門",
     "es_AR": "Introducción a clone",
     "pt_BR": "Introdução à clonagem",
+    "gl"   : "Introducción a clone",
     "zh_CN": "Git Clone",
     "zh_TW": "介紹 clone",
     "ru_RU": "Введение в клонирование",
@@ -58795,6 +60324,7 @@ exports.level = {
     "zh_CN": "只要 git clone 就可以了!",
     "es_AR": "Simplemente hacé git clone!",
     "pt_BR": "Basta fazer um git clone!",
+    "gl"   : "¡Chega con facer git clone!",
     "zh_TW": "只要 git clone 就好了",
     "ru_RU": "Простой git clone!",
     "ko"   : "그냥 git clone 하세요!",
@@ -59024,6 +60554,63 @@ exports.level = {
           "options": {
             "markdowns": [
               "Para completar este nível, simplesmente chame o comando `git clone`. Você aprenderá algo de verdade somente nas próximas lições."
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Repositorios remotos en Git",
+              "",
+              "Os repositorios remotos non son complicados en git. Actualmente ca computación na nube, pódese pensar que hai moita maxia tras os repositorios remotos de git, pero para nada é así -- en verdade son copias do repositorio, pero noutra máquina. Ti podes comunicarte xeralmente con esa outra máquina por medio de internet, o que permite que mandes commits de un repositorio cara o outro.",
+              "",
+              "Dito isto, os repositorios remotos teñen propiedades interesantes:",
+              "",
+              "- Primeiro e antes de todo, os repositorios remotos serven como unha copia de seguranza! Os repositorios locais posúen a habilidade de restaurar un arquivo nun estado anterior (como xa sabes), pero toda á información está gardada. Tendo copias do repositorio noutras máquinas, incluso poderías perder tódolos datos da túa computadora, e comenzar a traballar no punto onde o deixaches no último commit.",
+              "",
+              "- Máis importante aún, ¡os repositorios remotos fan que o desenvolvemento sexa social! Agora que existe unha copia do teu código noutro lugar, os teus amigos poden contribuír no teu proxecto (ou obter os últimos cambios) dunha forma moi simple.",
+              "",
+              "Hai webs moi populares onde se pode ver a actividade dos repositorios (como [Github](https://github.com/) ou [Phabricator](http://phabricator.org/)), pero estes recursos remotos _sempre_ axudan como mecanismo de base para esas ferramentas. ¡Entón é importante saber cómo funcionan!"
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## O noso comando para crear remotos",
+              "",
+              "Ata este punto, Learn Git Branching enfocouse en ensinar o básico respecto do traballo en repositorios _locais_ (branch, merge, rebase, etc). Entretanto, agora que queremos aprender como os repositorios remotos funcionan, precisamos dun comando para configurar o entorno para esas leccións. Este comando será `git clone`.",
+              "",
+              "Técnicamente, `git clone` no mundo real é un comando que fai copias _locais_ de repositório remotos (de GitHub para a túa máquina, por exemplo). Todavía, por motivos loxísticos, nós usaremos ese comando dunha forma un pouco diferente, Learn Git Branching -- aquí `git clone` creará un repositorio remoto a partir do repositorio local. Certamente, ese comportamento é exactamente o oposto do comando real, pero a pesares de iso axudarate a formar unha conexión mental entre a clonación e como funcionan os repositorios remotos, entón imos usalo desa forma.",
+              ""
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Imos comenzar a modo, e só ollar cómo un repositorio remoto semellase á nosa visualización.",
+              ""
+            ],
+            "afterMarkdowns": [
+              "¡Aquí o tes! Agora temos un respositorio remoto do noso proxecto. El é moi parecido exceto por algúns cambios visuais para ter a unha distinción visible -- nas tarefas a seguir veremos como compartir o traballo entre eses repositorios."
+            ],
+            "command": "git clone",
+            "beforeCommand": ""
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Para completar este nivel, escribe o comando `git clone`. Aprenderás algo de verdade sóamente nas próximas leccións."
             ]
           }
         }
@@ -59442,6 +61029,7 @@ exports.level = {
     "ja"   : "擬似的なチーム作業",
     "es_AR": "Simulando el trabajo en equipo",
     "pt_BR": "Simulando trabalho em equipe",
+    "gl"   : "Simulando o traballo no repositorio",
     "zh_CN": "模拟团队合作",
     "zh_TW": "模擬團隊合作",
     "ru_RU": "Коллективная работа",
@@ -59455,6 +61043,7 @@ exports.level = {
     "ja"   : "擬似的に作成するコミット数を指定できるのをお忘れなく",
     "es_AR": "Acordate que podés especificar cuántos commits simular",
     "pt_BR": "Lembre-se que você pode especificar quantos commits quer simular",
+    "gl"   : "Lembra que podes especifar cantos commits queres simular",
     "zh_CN": "记住你可以指定仿真提交的个数",
     "zh_TW": "你要記得指定要送多少個 commit 出去",
     "ru_RU": "помните, Вы можете указать количество фейковых коммитов",
@@ -59673,6 +61262,60 @@ exports.level = {
               "Os níveis posteriores serão mais difíceis, então estamos pedindo um pouco mais de você neste nível.",
               "",
               "Vá em frente e crie um repositório remoto (chamando `git clone`), simule algumas mudanças no repositório remoto, commite no repositório local, e então faça um pull das mudanças que haviam sido simuladas. É como se fossem várias lições em uma só!"
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Simulando o traballo no repositorio",
+              "",
+              "Entón, hai algo con trampa aquí -- para algunhas das leccións  seguintes, precisamos explicarche cómo baixar os cambios introducidos no repositorio remoto.",
+              "",
+              "Eso significa que escencialmente temos que \"finxir\" que o repositorio remoto foi actualizado por algún compañeiro, amigo ou  incluso nalgunha rama específica a cantidade de commits feitos.",
+              "",
+              "Para acadar esto, introduxemos o ben chamado comando `git fakeTeamwork`! É bastante auto-explicativo: semella traballo dos nosos colegas. Vexamos una demo..."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "O comportamento por defecto de `fakeTeamwork` é simplemente crear un commit en master na rama remota"
+            ],
+            "afterMarkdowns": [
+              "Ahí o tes: a rama remota actualizouse cun novo commit, e aínda non nos baixamos ese commit porque inda non fixemos `git fetch`."
+            ],
+            "command": "git fakeTeamwork",
+            "beforeCommand": "git clone"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Tamén podes especificar a cantidad de commits ou a rama agregándoos ó comando"
+            ],
+            "afterMarkdowns": [
+              "Cun único comando simulamos que un colega do equipo empurrou tres commits á rama `foo` do noso remoto"
+            ],
+            "command": "git fakeTeamwork foo 3",
+            "beforeCommand": "git branch foo; git clone"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Os niveis seguintes van ser un pouco máis complicados, así que imos a esixirte un pouco máis neste nivel.",
+              "",
+              "Anímate e crea unha rama remota (con `git clone`), e simula algúns cambios no repositorio remoto, logo desto, fai commit do teu repo local, e logo descarga os cambios. ¡É coma varias leccións nunha soa!"
             ]
           }
         }
@@ -60073,6 +61716,7 @@ exports.level = {
     "ja"   : "Git Fetch",
     "es_AR": "git fetch",
     "pt_BR": "Git Fetch",
+    "gl"   : "Git Fetch",
     "zh_CN": "Git Fetch",
     "zh_TW": "git fetch",
     "ru_RU": "Git fetch",
@@ -60086,6 +61730,7 @@ exports.level = {
     "ja"   : "単にgit fetchを実行！",
     "es_AR": "Simplemente ¡hacé git fetch!",
     "pt_BR": "Simplesmente chame git fetch!",
+    "gl"   : "¡Sinxelamente fai git fetch!",
     "zh_CN": "只需要运行 git fetch 命令!",
     "zh_TW": "只要下 git fetch 指令",
     "ru_RU": "Просто выполните git fetch!",
@@ -60380,6 +62025,79 @@ exports.level = {
           "options": {
             "markdowns": [
               "Para terminar este nível, simplesmente execute `git fetch` e baixe todos os commits!"
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Git Fetch",
+              "",
+              "Traballar con respositorios remotos en Git, a fin de contas, resúmese en transferir datos _dun_ repositorio _cara_ outros repositorios. Dende que podemos enviar commits dun lado cara o outro, poderemos compartir calquera tipo de actualización que sexa xerada por git (e polo tanto compartir o traballo, novos arquivos, novas ideas, cartas de amor, etc).",
+              "",
+              "Nesta lección imos aprender como baixar os cambios _dun_ repositorio remoto -- o comando para iso é `git fetch`.",
+              "",
+              "Percibirás que conforme atualizamos a representación do repositorio remoto, as nosas ramas _remotas_ actualizaranse para reflexar a nova representación. Iso ten que ver co que vimos na lección anterior sobre as ramas remotas"
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Ántes de entrar nos detalles de `git fetch`, vexámolo en acción! Aquí temos un repositorio remoto que contén dous commits que o noso repositorio local non ten."
+            ],
+            "afterMarkdowns": [
+              "Alá imos! Os commits `C2` e `C3` baixáronse ó noso repositorio local, e a nosa rama `o/master` actualizouse para reflexar ese cambio."
+            ],
+            "command": "git fetch",
+            "beforeCommand": "git clone; git fakeTeamwork 2"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "### O que fai o fetch",
+              "",
+              "`git fetch` fai dous pasos pasos principais, e soamente estes dous pasos princpipais. Son:",
+              "",
+              "* Baixa os commits que o repositório remoto contén pero non temos nos no noso repositoiro local, e...",
+              "* Actualiza a referencia nas ramas remotas (por exemplo, `o/master`) nas que se está apuntando",
+              "",
+              "`git fetch` esencialmente fai que a nosa representación _local_ do repositorio remoto se sincronice ca forma que posúe o repositorio remoto, _de feito_ parecese (nese momento).",
+              "",
+              "Se ti lembras a lección anterior, nos dixemos que as ramas remotas reflexan o estado dos repositorios remotos _dende a última vez_ na que ti fixeches un commit dese repositorio. O `git fetch` é a única forma de falar con eses repositorios remotos! Agardo que a conexión entre as ramas remotas e o `git fetch` esté clara dabondo agora.",
+              "",
+              "`git fetch` xeralmente fala co repositorio remoto por medio da rede (usando un protocolo como `http://`, `git://` ou `ssh`).",
+              ""
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "### O que fetch NON fai",
+              "",
+              "`git fetch`, por agora, non cambia nada no estado _local_ do repositorio. El solo actualiza a rama `master` sen facer cambios na forma de cómo está o teu sistema de arquivos nese momento.",
+              "",
+              "É importante entender iso, xa que moitos desenvolvedores pensan que executar `git fetch` fará que o traballo local se vexa modificado polo repositorio remoto. El pode que baixara todos os cambios necesarios para facelo, pero, o comando _non_ cambia cómo están os teus arquivos locais. Imos aprender comandos para facer esas conexións :D",
+              "",
+              "A fin de contas, ti podes pensar en `git fetch` como unha descarga."
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Para rematar este nivel, so executa `git fetch` e baixa todos os commits!"
             ]
           }
         }
@@ -60911,6 +62629,7 @@ exports.level = {
     "zh_TW": "fetch 的參數",
     "es_AR": "Parámetros de fetch",
     "pt_BR": "Parâmetros do fetch",
+    "gl"   : "Parámetros de fetch",
     "de_DE": "Optionen für Fetch",
     "ja"   : "Fetchの引数",
     "ru_RU": "Аргументы для fetch",
@@ -60924,6 +62643,7 @@ exports.level = {
     "zh_TW": "注意 commit 的 id 是怎麼被交換的！你可以透過 `help level` 來閱讀對話視窗！",
     "es_AR": "¡Prestá atención a cómo podrían haberse invertido los ids de los commits! Podés volver a leer toda la lección usando \"help level\"",
     "pt_BR": "Preste atenção em como os identificadores dos commits podem ter trocado! Você pode ler os slides novamente com \"help level\"",
+    "gl"   : "Preste atención en como poderían invertirse os ids dos commits! Podes volver ler toda a lección usando \"help level\"",
     "de_DE": "Beachte wie die Commit IDs getauscht wurden! Du kannst den Einführungsdialog mit \"help level\" erneut anzeigen",
     "ja"   : "コミットIDの入れ替わりに注意！スライドを復習するには`help level`を実行",
     "ru_RU": "Обратите внимание на то, как номера коммитов могут меняться! Вы можете прочесть слайды вновь, воспользовавшись командой \"help level\"",
@@ -61418,6 +63138,129 @@ exports.level = {
               "Ok, chega de conversa! Para completar este nível, faça fetch apenas dos commits especificados na visualização do objetivo. Capriche nos comandos!",
               "",
               "Você terá de especificar tanto a origem como o destino em ambos os comandos de fetch. Preste atenção na janela de visualização, já que os identificadores podem trocar!"
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Parámetros de fetch",
+              "",
+              "Entonces, aprendido todo sobre os parámetros de push, este parámetro `<lugar>` molón, e incluso as referencias separadas por dous puntos (`<orixe>:<destino>`). ¿Poderemos empregar todo este coñecemento para `git fetch` tamén?",
+              "",
+              "¡Home claro! Os parámetros para `git fetch` son realmente *moi, moi* semellantes os de `git push`. É o mesmo tipo de conceptos, pero aplicados na dirección contraria (xa que agora estás baixando os commits en lugar de subilos).",
+              "",
+              "Vexamos os conceptos dunha puntada..."
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "### O parámetro `<lugar>`",
+              "",
+              "Se especificar o lugar co git fetch como no comando seguinte:",
+              "",
+              "`git fetch origin foo`",
+              "",
+              "Git vai ir á rama `foo` no remoto, vai traer tódolos commits que non estén presentes localmente, e logo aplicaráos sobre a rama `o/foo` localmente.",
+              "",
+              "Vexámolo en acción (refresquemos o concepto)."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Especificando un lugar..."
+            ],
+            "afterMarkdowns": [
+              "Sólo baixamos os commits de `foo` e os poñemos en `o/foo`"
+            ],
+            "command": "git fetch origin foo",
+            "beforeCommand": "git branch foo; git clone; git fakeTeamwork foo 2"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Poderás preguntarte \"¿Por qué git aplicou eses commits sobre a rama `origin/foo` e non os aplicou sobre a rama `foo` local? Lembra que o parámetro `<lugar>` era un lugar que existía tanto no local como no remoto.\"",
+              "",
+              "Bueno, git fai unha excepción especial neste caso, xa que poderías ter traballo na rama `foo` que non quixeras mesturar. Esto refírese á lección anterior sobre `git fetch` - non actualiza as túas ramas locais non-remotas, só descarga os commits (para que poidas velos ou mesturalos despois).", 
+              ""
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "\"Bueno, e, neste caso, ¿qué pasa se explícitamente definimos o orixe e destino con `<origen>:<destino>`?\"",
+              "",
+              "Se te sentes o suficientemente seguro como para traer os commits *directamente* da rama local, entón, sí, podes especificalo empregando a referencia con dous puntos. Non podes traer commits a unha rama que non teñas, pero en calquera outro caso, git vaino facer.",
+              "",
+              "Este é o único problema, igual: `<orixe>` é agora un lugar no *remoto*, e `<destino>` é un lugar *local* onde poñer esos commits. É exactamente o oposto a git push, e eso ten sentido xa que ¡estamos enviando os datos no sentido contrario!",
+              "",
+              "Dito esto, difícilmente alguén use esto na práctica. Estouno presentando principalmente como un modo de traballar no que `fetch` e `push` son moi semellantes, só que en direccións opostas."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Vexamos esta locura en acción"
+            ],
+            "afterMarkdowns": [
+              "¡Wow! Mira: git resolveu `foo~1` como un lugar no que a orixe descargou eses commits a `bar` (que era unha rama local). Nota como `foo` e `o/foo` non foron actualizados, xa que especificamos o destino."
+            ],
+            "command": "git fetch origin foo~1:bar",
+            "beforeCommand": "git branch foo; git clone; git branch bar; git fakeTeamwork foo 2"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "¿Qué pasa si o destino non existe antes de lanzar este comando? Vexamos o último exemplo pero sin que `bar` exista de antemán."
+            ],
+            "afterMarkdowns": [
+              "Mira: é IGUAL que git push. Git creou o destino localmente antes de facer o fetch, tal e como git creará o destino no remoto antes de empurrar (se non existiran)."
+            ],
+            "command": "git fetch origin foo~1:bar",
+            "beforeCommand": "git branch foo; git clone; git fakeTeamwork foo 2"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "¿Sen argumentos?",
+              "",
+              "Se `git fetch` non recibe ningún argumento, simplemente descarga tódolos commits do remoto a tódalas ramas remotas..."
+            ],
+            "afterMarkdowns": [
+              "Moi sinxelo, pero vale a pena velo ó menos unha vez."
+            ],
+            "command": "git fetch",
+            "beforeCommand": "git branch foo; git clone; git fakeTeamwork foo; git fakeTeamwork master"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Bueno, moitas verbas. Para rematar o nivel, descarga só os commits especificados na visualización do obxectivo. ¡Faite colega destes comandos!",
+              "",
+              "Vas ter que especificar a orixe e o destino para ámbolos dous comandos fetch. Presta atención ó objetivo dado que ¡os IDs poden estar invertidos!"
             ]
           }
         }
@@ -62060,7 +63903,7 @@ exports.level = {
             "markdowns": [
               "### Параметр `<place>`",
               "",
-              "Якщо вк��зати параметр `<place>` для команди git fetch, наприклад, так:",
+              "Якщо вказати параметр `<place>` для команди git fetch, наприклад, так:",
               "",
               "`git fetch origin foo`",
               "",
@@ -62175,6 +64018,7 @@ exports.level = {
     "zh_TW": "diverged history",
     "es_AR": "Historia divergente",
     "pt_BR": "Histórico divergente",
+    "gl"   : "Histórico diverxente",
     "de_DE": "Abweichende History",
     "fr_FR": "Historique divergent",
     "ja"   : "履歴の分岐",
@@ -62188,6 +64032,7 @@ exports.level = {
     "zh_TW": "確認視覺化的目標中的順序",
     "es_AR": "Prestá atención al orden del objetivo",
     "pt_BR": "Preste atenção na ordem da visualização do objetivo",
+    "gl"   : "Presta atención ó orixe do obxectivo",
     "de_DE": "Beachte die Reihenfolge in der Zieldarstellung",
     "ja"   : "ゴールのツリーの順番を参考にすること",
     "fr_FR": "regardez l'ordre dans la fenêtre de visualisation d'objectif",
@@ -62763,6 +64608,150 @@ exports.level = {
               "* Simule trabalho de seus colegas (1 commit)",
               "* Faça um commit seu (1 commit)",
               "* Publique seu trabalho usando *rebase*"
+            ]
+          }
+        }
+      ]
+    },
+
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Traballo diverxente",
+              "",
+              "Ata agora vimos cómo descargar e mesturar os commits de outros e como empurrar os nosos. Parece bastante sinxelo, así que ¿cómo pode confundirse tanto a xente?",
+              "",
+              "A dificultade ven cando a historia dos repositorios *diverxe*. Antes de entrar nos detalles, vexamos un examplo...",
+              ""
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Imaxínate que clonas un repositorio o luns e comezas a desenvolver algo. Para o venres, xa estás listo para publicar o teu traballo, pero, ¡oh, oh! Os teus colegas tamén fixeron código durante a semana, facendo que o teu traballo quede desactualizado (e obsoleto). Ademáis, eles publicaron eses commits no repositorio remoto, así que agora o *teu* traballo está baseado nunha versión *vella* do proxecto, que xa non lle interesa a ninguén.",
+              "",
+              "Neste caso, o comando `git push` é ambiguo. Se executas `git push`, ¿git debería mudar o repositorio para como estaba o luns? ¿Deberías arranxar o teu código sen eliminar o código novo? ¿Ou debería ignorar completamente os teus cambio porque xa están desactualizados?",
+              "",
+              "Como hai tanta ambiguedade nesta situación (na que a historia diverxeu), git non che permite empurrar os teus cambios. En cambio, fórzate a integrar o último estado do respositorio remoto antes de poder compartir o teu traballo."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "¡Demasiada charla, vexámolo en acción!"
+            ],
+            "afterMarkdowns": [
+              "¿Ves? Non pasou nada, porque o comando falla. `git push` falla porque `C3`, o teu commit máis recente, está baseado no remoto sobre `C1`. O remoto foi actualizado a `C2` dende entonces, polo que git rechaza o teu push."
+            ],
+            "command": "git push",
+            "beforeCommand": "git clone; git fakeTeamwork; git commit"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "¿Cómo resolves esta situación? É sinxelo, todo o que tes que facer é basear o teu traballo na versión máis recente da rama remota.",
+              "",
+              "Hai un par de formas de facer esto, pero a máis sinxela é mover o teu traballo facendo un rebase. Probémolo a ver  cómo se ve."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Agora, se facemos rebase antes de empurrar..."
+            ],
+            "afterMarkdowns": [
+              "¡Boom! Actualizamos a nosa representación local do remoto con `git fetch`, rebasamos o noso traballo para reflexar os novos cambios do remoto, e despois os empurramos con `git push`"
+            ],
+            "command": "git fetch; git rebase o/master; git push",
+            "beforeCommand": "git clone; git fakeTeamwork; git commit"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "¿Hai outra forma de actualizar o meu traballo se actualizaran o repositorio remoto? ¡Pois claro! Vexamos cómo facer o mesmo pero empregando `merge`.",
+              "",
+              "Por máis que `git merge` non mova o teu traballo (só crea un commit de merge), é un modo de decirlle a git que integrase tódolos cambios do remoto. Esto é porque agora unha rama remota pasou a ser un *ancestro* da tua propia rama, o que significa que o teu commit reflexa os cambios de tódolos commits da rama remota.",
+              "",
+              "Vexamos unha mostra..."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Si no lugar de rebasar facemos un merge..."
+            ],
+            "afterMarkdowns": [
+              "¡Boom! Actualizamos a nosa representación local do remoto usando `git fetch`, *mesturamos* ou *mergeamos* o novo traballo xunto co noso (para reflexar os novos cambios no remoto), e despois os empurramos empregando `git push`"
+            ],
+            "command": "git fetch; git merge o/master; git push",
+            "beforeCommand": "git clone; git fakeTeamwork; git commit"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "¡Asombroso! ¿Hai forma de facer esto sen escreber tantos comandos?",
+              "",
+              "¡Claro que sí! Xa sabes que `git pull` é sinxelamente un atallo para facer fetch e merge. Ademáis, ¡`git pull --rebase` é un atallo para facer fetch e rebase!",
+              "",
+              "Vexamos estos atallos funcionando."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Primeiro con `--rebase`..."
+            ],
+            "afterMarkdowns": [
+              "¡Igual que antes! Só que máis corto."
+            ],
+            "command": "git pull --rebase; git push",
+            "beforeCommand": "git clone; git fakeTeamwork; git commit"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "E agora un `pull` común"
+            ],
+            "afterMarkdowns": [
+              "Outra vez, ¡exactamente o mesmo que antes!"
+            ],
+            "command": "git pull; git push",
+            "beforeCommand": "git clone; git fakeTeamwork; git commit"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Toda esta movida de fetchear, rebasear/mergear e pushear é bastante común. Nas seguintes leccións imos ver formas máis complexas de estes fluxos de traballo, pero por agora probemos o que vimos.",
+              "",
+              "Para resolver este nivel, fai o siguiente:",
+              "",
+              "* Clona o teu repositorio",
+              "* Simula algo de trabajo dun colega (1 commit)",
+              "* Commitea algo de traballo propio (1 commit)",
+              "* Publica o teu traballo *rebasando*"
             ]
           }
         }
@@ -63374,7 +65363,7 @@ exports.level = {
               "話しすぎましたね！この状況での動作をみてみましょう！"
             ],
             "afterMarkdowns": [
-              "見ましたか？コマンドが失敗して、何も起こりませんでした。あなたの最近の`C3`コミットはリモートの`C1`コミットに依存しているため、`git push`は失敗し���した。リモートには`C2`が更新されているので、gitはあなたのプッシュを拒否します。"
+              "見ましたか？コマンドが失敗して、何も起こりませんでした。あなたの最近の`C3`コミットはリモートの`C1`コミットに依存しているため、`git push`は失敗しました。リモートには`C2`が更新されているので、gitはあなたのプッシュを拒否します。"
             ],
             "command": "git push",
             "beforeCommand": "git clone; git fakeTeamwork; git commit"
@@ -63783,6 +65772,7 @@ exports.level = {
     "zh_TW": "merge with remotes",
     "es_AR": "Mergeando con los remotos",
     "pt_BR": "Merge com remotos",
+    "gl"   : "Merge cos repos remotos",
     "de_DE": "Änderungen vom Remote zusammenführen",
     "ja"   : "リモートとのmerge",
     "fr_FR": "Fusionner avec les branches distantes",
@@ -63796,6 +65786,7 @@ exports.level = {
     "zh_TW": "注意最後要完成的目標！",
     "es_AR": "¡Prestá atención al árbol final!",
     "pt_BR": "Preste atenção na árvore do objetivo!",
+    "gl"   : "Presta atención á arbore final!",
     "de_DE": "Beachte den Ziel-Baum!",
     "ja"   : "ゴールツリーをよく見てください！",
     "fr_FR": "Respectez l'arbre représentant l'objectif !",
@@ -63980,6 +65971,51 @@ exports.level = {
           "options": {
             "markdowns": [
               "Para este nível, tente resolver o mesmo problema do nível anterior, mas usando *merge* em vez de rebase. A árvore pode ficar um pouco cabeluda, mas isso ilustra bem o nosso ponto."
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## ¿Por qué non mesturar?",
+              "",
+              "Para empurrar as túas novidades ó remoto, todo o que tes que facer é *integrar* os últimos cambios do remoto cos teus. Eso significa que podes facer tanto rebase como merge ca rama remota (por exemplo, `o/master`).",
+              "",
+              "Así que podes facer calquera das dúas, ¿por qué as leccións só se centraron en rebasar ata agora? ¿Por qué non adicarlle algo de amor ó `merge` cando traballamos con remotos?",
+              ""
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Hai moito debate entre os desenvolvedores sobre os pros e contras de mesturar vs rebasar. Aquí temos os pros e os contras de rebasar:",
+              "",
+              "Pros:",
+              "",
+              "* Rebasar fai que a túa árbore de commits sexa bastante limpa, xa que tódolos commits seguen unha única línea.",
+              "",
+              "Contras:",
+              "",
+              "* Rebasar modifica a historia (aparente) da túa árbore de commits.",
+              "",
+              "Por exemplo, o commit `C1` pode rebasarse para que apareza *despois* de `C3`. Entón, parece que o traballo de `C1'` fíxose despois de `C3`, inda que na realidade fixérase antes.",
+              "",
+              "Algúns desenvolvedores  aman preservar a historia, polo que prefiren mesturar. Outros (coma min) preferimos ter unha árbore de commits limpos, e preferimos rebasar. Todo é unha cuestión de preferencias :D"
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Para este nivel, tratemos de resolvelo nivel anterior, pero *mesturando*. Pode poñerse un pouco oscuro, pero ilustra a idea bastante ben."
             ]
           }
         }
@@ -64314,6 +66350,7 @@ exports.level = {
     "zh_TW": "git pull",
     "es_AR": "git pull",
     "pt_BR": "Git Pull",
+    "gl"   : "Git Pull",
     "de_DE": "Git Pull",
     "ja"   : "Git Pull",
     "fr_FR": "Git pull",
@@ -64327,6 +66364,7 @@ exports.level = {
     "zh_TW": "只要下 git pull 這個指令即可",
     "es_AR": "Simplemente ¡hacé git pull!",
     "pt_BR": "Basta executar git pull!",
+    "gl"   : "Sinxelamente fai git pull!",
     "de_DE": "Führe einfach git pull aus.",
     "ja"   : "単にgit pullを実行！",
     "fr_FR": "Utilisez facilement git pull !",
@@ -64566,6 +66604,65 @@ exports.level = {
               "Vamos explorar os detalhes do `git pull` mais tarde (incluindo opções e parâmetros), mas por enquanto, experimente usá-lo em sua forma mais básica.",
               "",
               "Lembre-se -- você também poderia resolver este nível com um `fetch` e um `merge`, mas isso lhe custaria um comando a mais :P"
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Git Pull",
+              "",
+              "Agora que vimos cómo traer os datos dun repositorio remoto con `git fetch`, ¡actualicemos o noso traballo local para reflexar eses cambios!",
+              "",
+              "Realmente hai varias formas de facer esto: unha vez que teñas os commits dispoñibles localmente, podes integralos coma se foran commits comúns de outras ramas. Esto significa que poderías executar comandos como:",
+              "",
+              "* `git cherry-pick o/master`",
+              "* `git rebase o/master`",
+              "* `git merge o/master`",
+              "* etc., etc.",
+              "",
+              "De feito, o fluxo de traballo de *fetchear* os cambios remotos e depois *mesturalos* é tan común que git inclúe un comando que fai as dúas operacións nunha sola: ¡`giti pull`!"
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Vexamos primeiro un `fetch` e un `merge` executados secuencialmente"
+            ],
+            "afterMarkdowns": [
+              "Boom: descargamos `C3` cun `fetch` e logo mesturámolos con `git merge o/master`. Agora a nosa rama `master` reflexa o novo traballo do remoto (neste caso, chamado `origin`)"
+            ],
+            "command": "git fetch; git merge o/master",
+            "beforeCommand": "git clone; git commit; git fakeTeamwork"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "¿Qué pasaría se usáramos `git pull` en cambio?"
+            ],
+            "afterMarkdowns": [
+              "¡O mesmo! Eso debía deixar ben claro que `git pull` é básicamente un atallo para facer `git fetch` seguido pola mestura ca rama que houbésemos descargado."
+            ],
+            "command": "git pull",
+            "beforeCommand": "git clone; git commit; git fakeTeamwork"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Exploraremos os detalles de `git pull` despois (incluíndo as súas operacións e parámetros), pero por agora probarémolo neste nivel.",
+              "",
+              "Lémbrate: podes resolver este comando sinxelamente con `fetch` e `merge`, pero eso costaríache un comando extra :P"
             ]
           }
         }
@@ -64998,6 +67095,7 @@ exports.level = {
     "zh_TW": "pull 的參數",
     "es_AR": "Parámetros de pull",
     "pt_BR": "Parâmetros do pull",
+    "gl"   : "Parámetros de pull",
     "de_DE": "Optionen für Pull",
     "ja"   : "Pullの引数",
     "fr_FR": "Arguments de pull",
@@ -65011,6 +67109,7 @@ exports.level = {
     "zh_TW": "記住，你可以透過 fetch 以及 pull 來建立一個新的 local 的 branch",
     "es_AR": "Acordate de que podés crear nuevas ramas locales usando los parámetros de fetch/pull",
     "pt_BR": "Lembre-se que você pode criar novos ramos locais com parâmetros de fetch/pull",
+    "gl"   : "Lémbrate que podes crear novas ramas locais con parámetros de fetch/pull",
     "de_DE": "Du kannst neue lokale Branches mittels fetch / pull erstellen",
     "ja"   : "Fetchとpullの引数を利用してローカルで新規ブランチを作成できるのをお忘れなく",
     "fr_FR": "Vous pouvez aussi créer une nouvelle branche locale avec les arguments de fetch/pull",
@@ -65310,6 +67409,80 @@ exports.level = {
           "options": {
             "markdowns": [
               "Ok, para terminar, obtenha o estado da visualização do objetivo. Você vai precisar baixar alguns commits, criar novos ramos, e fazer merge de ramos em outros ramos, mas não deve precisar de muitos comandos para isso :P"
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Parámetros de git pull",
+              "",
+              "Agora que sabes prácticamente *todo* o que hai que saber sobre os parámetros de `git fetch` e `git push`, casi que non queda nada para cubrir os de git pull :D",
+              "",
+              "Eso é porque git pull é sinxelamente un atallo para facer un fetch seguido dun merge. Podes pensalo como executar git fetch cos *mesmos* parámetros, e logo mesturar aquelo onde esos commits houberan ido ficar.",
+              "",
+              "Esto aplica incluso cando usas parámetros hiper-complexos. Vexamos algúns exemplos:"
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Estos son algúns comandos equivalentes de git:",
+              "",
+              "`git pull  origin foo` equivale a:",
+              "",
+              "`git fetch origin foo; git merge o/foo`",
+              "",
+              "E...",
+              "",
+              "`git pull  origin bar~1:bugFix` equivale a:",
+              "",
+              "`git fetch origin bar~1:bugFix; git merge bugFix`",
+              "",
+              "¿Ves? git pull é sinxelamente un atallo para un fetch + merge, e todo o que lle importa a git pull é ónde terminaron eses commits (o parámetro `destino` que indícase durante o fetch).",
+              "",
+              "Vexamos unha demostración:"
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Se especificamos o lugar do que facer o fetch, todo ocorre coma antes, pero só mesturamos o que se descargou"
+            ],
+            "afterMarkdowns": [
+              "¡Ves! Indicando `master` baixamos os commits á `o/master` coma sempre. Despois mesturamos `o/master` á nosa rama actual, *sen importar* qué tiñamos na nos copia de traballo."
+            ],
+            "command": "git pull origin master",
+            "beforeCommand": "git clone; go -b bar; git commit; git fakeTeamwork"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "¿Esto funciona co orixe e o destino, tamén? ¡Máis lle vale! Vexámolo:"
+            ],
+            "afterMarkdowns": [
+              "Wow, eso es unha CHEA nun único comando. Creamos unha nova rama local chamada `foo`, descargamos os commits do master do remoto a esta rama `foo`, e logo mesturamos esa rama á nosa rama actual `bar`. ¡¡¡Supera os 9000!!!"
+            ],
+            "command": "git pull origin master:foo",
+            "beforeCommand": "git clone; git fakeTeamwork; go -b bar; git commit"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "OK: para rematar, alcanza o estado do obxectivo. Vase necesitar descargar algúns commits, crear algunhas ramas novas, e mesturar esas ramas xunto con outras, pero non debería levar demasiados domandos :P"
             ]
           }
         }
@@ -65773,6 +67946,7 @@ exports.level = {
     "zh_TW": "git push",
     "es_AR": "git push",
     "pt_BR": "Git Push",
+    "gl"   : "Git Push",
     "de_DE": "Git Push",
     "ja"   : "Git Push",
     "fr_FR": "Git push",
@@ -65959,6 +68133,49 @@ exports.level = {
           "options": {
             "markdowns": [
               "Para completar este nível, simplesmente compartilhe dois novos commits com o repositório remoto. No entanto, segure-se no seu assento, pois estas lições estão prestes a ficar mais difíceis!"
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Git Push",
+              "",
+              "Ok, entón xa baixamos os cambios dun repositorio remoto e integrámolos na árbore local. Esto está xenial... pero ¿cómo comparto o _meu_ sensacional traballo cas outras persoas?",
+              "",
+              "Ben, a forma de subir traballo para ser compartido é a oposta daquela de baixar o traballo que foi compartido. E ¿qué é o oposto a  `git pull` (tirar)? ¡É `git push` (empuxar)!",
+              "",
+              "`git push` é o responsable de subilos _teus_ cambios para un repositorio remoto especificado, e atualizar ese repositorio remoto para incorporar os seus novos commits. Unha vez que `git push` complétase, todos os teus amigos poderán baixar o teu traballo do repositorio remoto.",
+              "",
+              "Podes pensar en `git push` como un comando para \"publicar\" o teu traballo. O comando ten unha serie de detalles cos que imos xogar logo, pero comezemos con pasos curtos...",
+              "",
+              "*Nota -- o comportamento de `git push` sen argumentos varía dependendo da configuración `push.default` de Git. O valor para esa configuración depende da versión de Git que esteas empregando, pero imos asumir o valor `upstream` nestas leccións. Eso non é un gran problema, pero paga a pena verificalas súas configuracións antes de facer push nos teus propios proxectos.*"
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Aquí temos algúns cambios que o repositorio remoto non contén. ¡Imos subilas!"
+            ],
+            "afterMarkdowns": [
+              "Ahí imos -- o repositorio remoto recibiu o commit `C2`, a rama `master` do repositorio remoto foi actualizado para apuntar para `C2`, e o *noso* reflexo do remoto (`o/master`) foi atualizado tamén. ¡Está todo sincronizado!"
+            ],
+            "command": "git push",
+            "beforeCommand": "git clone; git commit"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Para completar este nivel, comparte dous novos commits co repositorio remoto. Igual, non te confíes, ¡xa se  complicará nas seguintes leccións!"
             ]
           }
         }
@@ -66279,6 +68496,7 @@ exports.level = {
     "zh_TW": "git push 的參數",
     "es_AR": "Parámetros de git push",
     "pt_BR": "Parâmetros do git push",
+    "gl"   : "Parámetros de git push",
     "de_DE": "Optionen für Git Push",
     "ja"   : "Git pushの引数",
     "fr_FR": "Arguments de git push",
@@ -66292,6 +68510,7 @@ exports.level = {
     "zh_TW": "你可以利用 \"objective\" 來閱讀對話視窗的最後一頁",
     "es_AR": "Siempre podés ver el último mensaje tipeando \"objective\"",
     "pt_BR": "Você sempre pode rever o último slide com o comando \"objective\"",
+    "gl"   : "Ti sempre podes desfacer último mensaxe escribindo \"objective\"",
     "de_DE": "Du kannst dir die Zielsetzung des Levels immer wieder mit \"objective\" anzeigen lassen",
     "ja"   : "ダイアログの最後のスライドを参照するには\"objective\"を実行",
     "fr_FR": "Vous pouvez toujours regarder le dernier slide des dialogues en tapant \"objective\".",
@@ -66586,6 +68805,78 @@ exports.level = {
           "options": {
             "markdowns": [
               "Ok, neste nível vamos atualizar tanto o `foo` como o `master` no repositório remoto. Porém desabilitamos o comando `git checkout` para dificultar um pouco a tarefa!"
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Parámetros de push",
+              "",
+              "¡Xenial! Agora que sabes acerca das ramas que seguen remotos, podemos empezas a desvelar algo do misterio detrás do git push, fetch e pull. Imos atacar cun só comando dunha vez, pero os conceptos entre eles son moi semellantes.",
+              "",
+              "Vexamos primeiro `git push`. Xa aprendiches na lección sobre as ramas remotas que git determina o remoto *e* a rama á que empurrar mirando as propiedades da rama actual (o remoto ó que seguir). Este é o comportamento por defecto para  cando non se especifican parámetros, pero git push toma, opcionalmente, parámetros da forma:",
+              "",
+              "`git push <remoto> <lugar>`",
+              "",
+              ""
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "¿Qué será este parámetro `<lugar>`, fixécheste esa pregunta? Xa imos entrar en detalle, pero primeiro un exemplo. Executa o comando:",
+              "",
+              "`git push origin master`",
+              "",
+              "tradúcese así ó galego:",
+              "",
+              "*Vai á rama chamada \"master\" no meu repositorio, colle tódolos commits, e despois vai á rama \"master\" do remoto chamado \"origin\". Aplica ahí tódolos commits que falten, e avísame cando remates.*",
+              "",
+              "Indicando `master` como o parámetro \"lugar\", dixémoslle a git ónde traer os commits, e ónde mandalos. É básicamente, o \"lugar\" ou \"ubicación\" que sincroniza entre ámbolos dous repositorios.",
+              "",
+              "Ten en conta que, como lle dixemos a git todo o que precisaba saber (indicando ambos parámetros), ¡ignora totalmente ónde andabamos neste momento!"
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Vexamos un exemplo especificando os parámetros. Nota ónde ficamos parados neste exemplo."
+            ],
+            "afterMarkdowns": [
+              "¡Ahí o tes! Actualizouse `master` no remoto, porque especificamos eses parámetros."
+            ],
+            "command": "git checkout C0; git push origin master",
+            "beforeCommand": "git clone; git commit"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "¿E se non especificáramos os parámetros? ¿Que ocorrería?"
+            ],
+            "afterMarkdowns": [
+              "O comando falla (como podes ver), xa que `HEAD` non está sobre ningunha rama que siga algún remoto."
+            ],
+            "command": "git checkout C0; git push",
+            "beforeCommand": "git clone; git commit"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Ok. Para este nivel, actualiza tanto `foo` como `master` no remoto. O tema está en que ¡temos deshabilitado `git checkout` neste nivel!"
             ]
           }
         }
@@ -67049,6 +69340,7 @@ exports.level = {
     "zh_TW": "git push 的參數，延伸討論！",
     "es_AR": "¡Más! Parámetros de git push",
     "pt_BR": "Parâmetros do git push -- expandido",
+    "gl"   : "Parámetros de git push -- ampliado",
     "de_DE": "Optionen für Git Push -- noch mehr!",
     "ja"   : "Git pushの引数 -- 拡張編!",
     "fr_FR": "Arguments de git push -- toujours plus !",
@@ -67062,6 +69354,7 @@ exports.level = {
     "zh_TW": "如果你失敗了，可以利用 \"show solution\" 來找到解答:P",
     "es_AR": "Recordá que podés admitir tu derrota y tipear \"show solution\" para ver la solución :P",
     "pt_BR": "Lembre-se que você pode admitir que foi derrotado e digitar \"show solution\" :P",
+    "gl"   : "Lembrate que podes admitir que fuches derrotado e escribir \"show solution\" para amosala solución :P",
     "de_DE": "Vergiss nicht dass du aufgeben kannst, indem du \"show solution\" eingibst :P",
     "ja"   : "降参して解説を見るには\"show solution\"を実行できるのをお忘れなく",
     "fr_FR": "N'oubliez pas que vous pouvez toujours déclarer forfait avec \"show solution\" :P",
@@ -67345,6 +69638,76 @@ exports.level = {
               "Para este nível, tente chegar ao estado do objetivo mostrado na visualização, e lembre-se do formato:",
               "",
               "`<origem>:<destino>`"
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Detalles sobre o parámetro `<lugar>`",
+              "",
+              "Lémbrate da lección anterior cando especificamos `master` como o parámetro lugar de git push, especificamos tanto a *orixe* do que sacar os commits como o *destino* ó que envialos.",
+              "",
+              "Poderías estar a preguntarte ¿E se quixéramos que a orixe  e o destino sexan distintos? ¿Se quixéramos empurrar os commits da  rama local `foo` á rama `bar` do remoto?",
+              "",
+              "Bueno, esto non se pode facer en git... ¡Caramboliñas! Claro que se pode :D. git é extremadísimamente flexibe (case case que de máis).",
+              "",
+              "Vexamos cómo facelo a continuación..."
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Para especificar tanto a orixe como o destino de `<lugar>`, sinxelamente úneos empregando dous puntos:",
+              "",
+              "`git push origin <orixe>:<destino>`",
+              "",
+              "Esto pódeselle chamar refspec con dous puntos. Refspec é sinxelamente un nome cool para unha ubicación que git pode entender (como a rama `foo`, ou incluso `HEAD~1`)",
+              "",
+              "Unha vez que especificas a orixe e o destino independientemente, podes poñerte cómodo e preciso cos  comandos remotos. ¡Vexamos a demo!"
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Lembra: `orixe` é calquera ubicación que git poida entender:"
+            ],
+            "afterMarkdowns": [
+              "¡Woow! Ese commando é unha tolemia, pero ten sentido: git resolveu `foo^` a unha ubicación, subiu calquera commit de ahí que aún non estivera no remoto, e logo actualizou o destino."
+            ],
+            "command": "git push origin foo^:master",
+            "beforeCommand": "git clone; go -b foo; git commit; git commit"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "¿E qué hai se o destino ó que queres empurrar non existise? ¡Non pasa nada! Sinxelamente dalle un nome á rama e git vaise encargar de crealo no remoto."
+            ],
+            "afterMarkdowns": [
+              "Xenial, sinxelamente tira para adiante" 
+            ],
+            "command": "git push origin master:newBranch",
+            "beforeCommand": "git clone; git commit"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Para este nivel, intenta chegar o obxectivo final, e lembrate do formato:",
+              "",
+              "`<orixe>:<destino>`"
             ]
           }
         }
@@ -67784,6 +70147,7 @@ exports.level = {
     "zh_TW": "你隨時都可以使用 undo 或 reset 指令。",
     "es_AR": "Acordate que siempre podés usar los comandos reset y undo",
     "pt_BR": "Lembre-se que você sempre pode usar undo ou reset",
+    "gl"   : "Lembra que sempre podes usar undo ou reset",
     "de_DE": "Denk dran, du kannst immer undo oder reset benutzen, um deine Befehle zurück zu nehmen.",
     "ja"   : "undoやresetコマンドをいつでも使用することができるのをお忘れなく",
     "fr_FR": "Rappelez-vous que vous pouvez toujours utiliser les commandes undo et reset.",
@@ -67797,6 +70161,7 @@ exports.level = {
     "zh_TW": "push master！",
     "es_AR": "¡Push Master!",
     "pt_BR": "Push Master!",
+    "gl"   : "Empurra ó Master!",
     "de_DE": "Push Master!",
     "ja"   : "Push Master!",
     "fr_FR": "Maître du push !",
@@ -68013,6 +70378,59 @@ exports.level = {
               "* O repositório remoto foi atualizado desde então, então também precisaremos incorporar o trabalho realizado lá",
               "",
               ":O intenso! boa sorte, completar este nível é um grande passo."
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Mesturando ramas",
+              "",
+              "Agora que estás afeito a descargar, mesturar e empurrar, poñamos a proba estas habilidades cun novo fluxo de traballo.",
+              "",
+              "É bastante común que os desenvolvedores nos grandes proxectos traballen sobre ramas específicas para cada tarefa (feature branches) baseadas en `mater`, e que as integren só cando están preparadas. Esto é similar á lección anterior, na que empurrábamos as ramas periféricas ó remoto, pero acá temos un paso máis.",
+              "",
+              "Algúns desenvovledores só empurran e descargan cando están en `master`: de ese xeito, `master` sempre mantén actualizado o seu estado co remoto (`o/master`).",
+              "",
+              "Entón, neste fluxo de traballo combinamos dúas cousas:",
+              "",
+              "* integramos o traballo das ramas específicas a `master`, e",
+              "* empurramos e turramos do remoto"
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Refresquemos un pouco cómo actualizar `master` e empurrar o noso traballo."
+            ],
+            "afterMarkdowns": [
+              "Agora executamos dous comandos que:",
+              "",
+              "* rebasamos o noso traballo sobre os novos commits do remoto, e",
+              "* publicamos o noso traballo nese remoto"
+            ],
+            "command": "git pull --rebase; git push",
+            "beforeCommand": "git clone; git commit; git fakeTeamwork"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Este nivel é bastante pesado. Aquí tes algúns patróns para resolvelo:",
+              "",
+              "* Temos tres ramas específicas -- `side1` `side2` e `side3`",
+              "* Queremos empurrar cada unha de esas ramas, en orde, ó remoto",
+              "* O remoto foi actualizado, así que imos ter que integrar eses cambios tamén",
+              "",
+              ":O ¡Intenso! ¡Éxitos! Completar este nivel representa un grande avance."
             ]
           }
         }
@@ -68403,6 +70821,7 @@ exports.level = {
     "zh_TW": "remote branch （遠端分支）",
     "es_AR": "Ramas remotas",
     "pt_BR": "Ramos remotos",
+    "gl"   : "Ramas remotas",
     "de_DE": "Branches auf entfernten Servern",
     "ja"   : "リモートのブランチ",
     "fr_FR": "Les branches distantes",
@@ -68416,6 +70835,7 @@ exports.level = {
     "zh_TW": "注意順序的問題喔！先在 master branch 上面送 commit",
     "es_AR": "Prestá atención al orden: ¡commiteá sobre master primero!",
     "pt_BR": "Preste atenção na ordem: commite no master primeiro!",
+    "gl"   : "Preta atención á orde: fai commit no master primeiro",
     "de_DE": "Beachte die Sortierung -- committe zuerst auf dem master!",
     "ja"   : "順番に注意 -- まずmasterに対してcommitしましょう",
     "fr_FR": "Prêtez attention à l'ordre -- les commits sur master d'abord !",
@@ -68663,6 +71083,67 @@ exports.level = {
           "options": {
             "markdowns": [
               "Para completar este nível, commite uma vez em `master`, e outra vez depois de fazer checkout em `o/master`. Isso vai ajudá-lo a sentir como os ramos remotos se comportam de forma diferente, e como eles apenas se atualizam para refletir o estado do repositório remoto."
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Ramas remotas de git",
+              "",
+              "Agora que viches `git clone` en acción, mergullémonos no que realmente mudou.",
+              "",
+              "O primeiro que notarías é que apareceu unha nova rama no teu repositorio local chamada `o/master`. A este tipo de ramas chámaselle ramas _remotas_. As ramas remotas teñén propiedades especiais porque serven para un propósito específico.",
+              "",
+              "As ramas remotas reflexan o _estado_ dos repositorios remotos (como estaban á última vez que falaches con eles). Axúdante a entender as diferencias entre o teu traballo local e o teu traballo que xa está publicado - un paso crítico antes de compartir o teu traballo cos demáis.",
+              "",
+              "As ramas remotas teñen a propiedade especial de que cando fas checkout, pasas o modo detached `HEAD`. Git faino a drede porque non podes traballar nesas ramas directamente: tes que traballar nalgún outro lado e despois compartir o teu traballo co remoto (tras o que as túas ramas remotas actualizaranse)."
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "### ¿Qué é `o/`?",
+              "",
+              "Poderías estar a preguntarte qué significa ese `o/` ó principio das ramas remotas. Bueno, as ramas remotas tamén teñen unha convención de nomes obligatoria -- se as amosas co formato:",
+              "",
+              "* `<nome do remoto>/<nome da rama>`",
+              "",
+              "Entonces, se miras unha rama chamada `o/master`, o nome da rama é `master`, e o nome do remoto é `o`.",
+              "",
+              "A maioría dos desenvolvedores chaman `origin` ó seu remoto no lugar de `o`. Esto é tan común que git efectivamente crea o teu remoto chamandoo `origin` cando fas `git clone` dun repositorio.",
+              "",
+              "Desafortunadamente o nome `origin` completo non entra na nosa  UI, así que empregaremos `o` para acortar: (Sinxelamente recorda que cando uses git na vida real, o teu remote ¡probablemente se chame `origin`!)",
+              "",
+              "Hai moito para procesar, así que vexámolo en acción."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Fagamos checkout a unha rama remota a ver qué pasa"
+            ],
+            "afterMarkdowns": [
+              "Como ves, git púxonos no modo detached `HEAD` e non actualizou `o/mater` cando creamos un novo commit. Esto é porque `o/mater` só vai actualizarse cando o remoto se actualice."
+            ],
+            "command": "git checkout o/master; git commit",
+            "beforeCommand": "git clone"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Para completar este nivel, fai commit unha vez sobre `mater` e despois de facer o checkout a `o/master`. Esto vaite axudar a entender cómo funcionan as ramas remotas, e que só se actualizan para reflexar o estado do remoto."
             ]
           }
         }
@@ -69109,6 +71590,7 @@ exports.level = {
     "zh_TW": "沒有 source",
     "es_AR": "Origen de nada",
     "pt_BR": "Origem vazia",
+    "gl"   : "Orixen de nada",
     "de_DE": "Die Quelle des Nichts",
     "ja"   : "無のsource",
     "fr_FR": "Source de rien du tout",
@@ -69122,6 +71604,7 @@ exports.level = {
     "zh_TW": "在本關卡中，不允許使用 branch 指令，因此你只能使用 fetch！",
     "es_AR": "El comando branch está deshabilitado para este nivel, así que ¡vas a tener que usar fetch!",
     "pt_BR": "O comando branch está desabilitado para este nível, então você terá de usar o fetch!",
+    "gl"   : "O comando branch está deshabilitado para este nivel, entón terás que empregar o comando fetch!",
     "de_DE": "Der branch Befehl ist für diesen Level inaktiv, du musst also fetch benutzen",
     "ja"   : "このレベルではbranchコマンドが無効になっているのでfetchを使うしかない！",
     "fr_FR": "La commande branch est désactivée pour ce niveau, vous devrez donc utiliser fetch !",
@@ -69337,6 +71820,59 @@ exports.level = {
           "options": {
             "markdowns": [
               "Este é um nível rápido de resolver -- basta remover um ramo remoto com `git push` e criar um novo ramo local com `git fetch` para terminar!"
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "### Rarezas do `<orixe>`",
+              "",
+              "Git abusa do parámetro `<orixe>` de dúas maneiras extranas. Estos dous abusos veñen do feito de que técnicamente podes especificar \"á nada\" como un `orixe` válido tanto para git push como para git fetch. O modo de especificar a nada é a través dun parámetro vacío:",
+              "",
+              "* `git push origin :side`",
+              "* `git fetch origin :bugFix`",
+              "",
+              "Vexamos qué fan..."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "¿Qué fai cando se empurra a \"nada\" a unha rama remota? ¡Eliminaa!"
+            ],
+            "afterMarkdowns": [
+              "Ahí está, borramos a rama `foo` exitosamente do remoto empurrando o concepto da \"nada\". Ten algo de sentido..."
+            ],
+            "command": "git push origin :foo",
+            "beforeCommand": "git clone; git push origin master:foo"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Finalmente, descargar a \"nada\" a un lugar local na realidade crea unha nova rama"
+            ],
+            "afterMarkdowns": [
+              "Bastante bizarro, pero, meh, da igual. Así é git."
+            ],
+            "command": "git fetch origin :bar",
+            "beforeCommand": "git clone"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "Este é un nivel rápido: simplemente borra unha rama remota e crea unha nova empregando `git fetch` para completalo."
             ]
           }
         }
@@ -69674,6 +72210,7 @@ exports.level = {
     "zh_TW": "remote tracking",
     "es_AR": "Trackeando remotos",
     "pt_BR": "Seguindo remotos",
+    "gl"   : "Traceando os remotos",
     "de_DE": "Remote Tracking",
     "ja"   : "リモートのトラッキング",
     "fr_FR": "Suivi de branche distante",
@@ -69687,6 +72224,7 @@ exports.level = {
     "zh_TW": "記住喔，有兩個方式可以去設定 remote tracking",
     "es_AR": "¡Acordate de que hay dos formas de trackear un remoto!",
     "pt_BR": "Lembre-se que há duas formas de seguir um ramo remoto!",
+    "gl"   : "¡Lembrate de que hai dúas formas de seguir unha rama remota!",
     "de_DE": "Nicht vergessen, es gibt zwei Arten Remote Tracking einzurichten!",
     "ja"   : "リモートトラッキングを設定する方法が二つあるのをお忘れなく!",
     "fr_FR": "Rappelez-vous qu'il existe deux façons de configurer le suivi de branche distante !",
@@ -70164,6 +72702,126 @@ exports.level = {
           "options": {
             "markdowns": [
               "Ok! Para este nível, vamos fazer push no ramo remoto `master` *sem estar* em um checkout do `master` local. Vou deixar você descobrir o resto, já que isto é um curso avançado :P"
+            ]
+          }
+        }
+      ]
+    },
+    "gl": {
+      "childViews": [
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "### Ramas que trackean os remotos",
+              "",
+              "Unha das cousas que poden semellar \"máxicas\" das últimas leccións é que git sabía que a rama `master` estaba relacionada co `o/master`. Obviamente, estas ramas teñen nomes semellantes, e podería semellar lóxico conectar a rama `master` do remoto ca rama `master` local, pero esta conexión é ben evidente nos dous escenarios:",
+              "",
+              "* Durante unha operación de pull, os commits descarganse ó `o/master` e logo *mesturanse* á rama `master`. O obxectivo implícito do merge determinase con esta conexión.",
+              "* Durante un push, o traballo da rama `master` súbese á rama `master` do remoto (que estaba representada localmente por `o/master`). O *destino* do push determinouse con esta conexión entre `master` e `o/master`.",
+              ""
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "## Trackeando remotos",
+              "",
+              "Facéndoa curta, esta conexión entre `master` e `o/master` ensínase pola propiedade de \"trackear (seguir) remotos\" das ramas. A rama `master` está configurada para trackear `o/master` -- o que quere dicir, que hai un obxectivo implícito para o merge e un destino implícito para a rama  `master`.",
+              "",
+              "Poderías estar pensando cómo esa propiedade apareceu na túa rama `master` se ti non executaches ningún comando para especificalo. Bueno, cando clonas un repositorio co git, esta propiedade asignase por ti automáticamente.",
+              "",
+              "Durante un clone, git crea unha rama remota por cada rama no remoto (por exemplo, ramas como `o/master`). Pero despois crea unha rama local que trakea a rama activa do remoto, que habitúa ser `master`.",
+              "",
+              "Una vez completado o git clone, só tés unha única rama local (para que non te asustes) pero podes ver todalas ramas que do remoto (se fora tan curioso). ¡É o mellor de ámbolos dous mundos!",
+              "",
+              "Esto tamén explica por qué poderías ver unha mensaxe como este durante a clonación:",
+              "",
+              "    local branch \"master\" set to track remote branch \"o/master\"",
+              "",
+              "    rama local \"master\" establecida para trackear a rama remota \"o/master\""
+            ]
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "### ¿Podo especificalo eu?",
+              "",
+              "¡Claro que sí! Podes facer que calquera rama que quixeras seguir `o/master`, e se o fixeras, esa rama vai ter o mesmo destino implícito de push e  obxectivo implícito de merge que `master`. Eso significa que podes executar `git push` nunha rama chamada `nonMaster` e ¡que o teu traballo se empurre á rama `master` do remoto!",
+              "",
+              "Hai dúas formas de establecer esta propiedade. A primeira é facer checkout a unha nova rama empregando unha rama remota como a referencia especificada. Executar",
+              "",
+              "`git checkout -b nonMaster o/master`",
+              "",
+              "Crea unha nova rama chamada `nonMaster` e persigue a `o/master`."
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Suficiente charla, ¡vexamos unha demo! Imos facer checkout a unha nova rama chamada `foo` e facer que siga a `master` no remoto." 
+            ],
+            "afterMarkdowns": [
+              "Como podes ver, empregamos o obxectivo implícito de merge `o/master` para actualizar a rama `foo`. ¡Nota como `master` non foi actualizada!"
+            ],
+            "command": "git checkout -b foo o/master; git pull",
+            "beforeCommand": "git clone; git fakeTeamwork"
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "O mismo aplica para git push"
+            ],
+            "afterMarkdowns": [
+              "Boom. Empurramos o noso traballo á rama `master` do remoto incluso cando a nosa rama se chamaba totalmete distinto"
+            ],
+            "command": "git checkout -b foo o/master; git commit; git push",
+            "beforeCommand": "git clone"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "### Forma número 2",
+              "",
+              "Outra forma de especificar a rama a seguir é usar a opción `git branch -u`. Executando",
+              "",
+              "`git branch -u o/master foo`",
+              "",
+              "establecemos que a rama `foo` segue a `o/mater`. Se por riba estás parado en `foo`, incluso podes obvialo:",
+              "",
+              "`git branch -u o/master`",
+              ""
+            ]
+          }
+        },
+        {
+          "type": "GitDemonstrationView",
+          "options": {
+            "beforeMarkdowns": [
+              "Vexamos rápidamente está outra forma de especificar a rama a seguir..."
+            ],
+            "afterMarkdowns": [
+              "O mesmo que antes, só que un comando bastante máis explícito. ¡Unha cousa preciosa!"
+            ],
+            "command": "git branch -u o/master foo; git commit; git push",
+            "beforeCommand": "git clone; git checkout -b foo"
+          }
+        },
+        {
+          "type": "ModalAlert",
+          "options": {
+            "markdowns": [
+              "¡Ok! Para este nivel, empurra o teu traballo á rama `master` do remoto *sen* estar parado sobre `master` localmente. Déixote que te decates do resto ti só, que para algo estás nun nivel avanzado :P"
             ]
           }
         }

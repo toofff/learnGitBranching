@@ -14,7 +14,7 @@
   <meta property="og:description" content="An interactive Git visualization tool to educate and challenge!"/>
   <meta http-equiv="content-language" content="en">
 
-  <link rel="stylesheet" href="build/main.a07438c0.css" type="text/css" charset="utf-8">
+  <link rel="stylesheet" href="build/main.c9414530.css" type="text/css" charset="utf-8">
   <link rel="stylesheet" href="src/style/font-awesome.css" type="text/css" charset="utf-8">
   <link rel="stylesheet" href="src/style/rainbows.css" type="text/css" charset="utf-8">
 </head>
@@ -104,15 +104,6 @@
   <div id="helperBarMount">
   </div>
 
-  <!-- lol inline styles -->
-  <a class="githubLink" href="https://github.com/pcottle/learnGitBranching" target="_blank">
-    <img
-      style="position: absolute; top: 0; right: 0; border: 0;"
-      src="assets/forkme_right_darkblue_121621.png"
-      alt="Fork me on GitHub"
-    />
-  </a>
-
   <!-- Dependencies -->
   <script type="text/javascript">
     // PhantomJS doesn't support bind yet LOL. polyfill locally so tests
@@ -125,9 +116,9 @@
     };
   </script>
 
-  <script src="//cdnjs.cloudflare.com/ajax/libs/es5-shim/4.1.1/es5-shim.min.js"></script>
-<script src="//cdnjs.cloudflare.com/ajax/libs/jquery/1.8.0/jquery.min.js"></script>
-<script src="//cdnjs.cloudflare.com/ajax/libs/raphael/2.1.0/raphael-min.js"></script>
+  <script src="lib/jquery-1.8.0.min.js"></script>
+<script src="lib/raphael-min.js"></script>
+<script src="lib/es5-shim.min.js"></script>
 
   <script src="lib/jquery-ui-1.9.0.custom.min.js"></script>
 
@@ -469,7 +460,7 @@
        For a much easier time perusing the source, see the individual files at:
           https://github.com/pcottle/learnGitBranching
   -->
-  <script src="build/bundle.min.74b8d715.js"></script>
+  <script src="build/bundle.js"></script>
 
   <!-- The advantage of github pages: super-easy, simple, slick static hostic.
        The downside? No raw logs to parse for analytics, so I have to include
